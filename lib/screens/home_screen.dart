@@ -485,13 +485,69 @@ class _HomeScreenState extends State<HomeScreen> {
     return _completedStops.fold(0, (sum, stop) => sum + stop.actualKoli);
   }
 
+  void _handleBackToHome() {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.arrow_back, color: Color(0xFF0D47A1), size: 24),
+              SizedBox(width: 8),
+              Text(
+                'Kembali ke Beranda',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Apakah Anda yakin ingin keluar dan kembali ke halaman beranda? Perjalanan saat ini akan dihentikan.',
+            style: TextStyle(fontSize: 14, color: Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Batal',
+                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _resetSimulation();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0D47A1),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text(
+                'Ya, Beranda',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        title: const Text('Simulasi Multi-Seller & Input Driver'),
+        title: Text(_isTripStarted ? 'Perjalanan Driver' : 'Beranda Driver'),
         centerTitle: true,
+        leading: _isTripStarted
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Kembali ke Beranda',
+                onPressed: _handleBackToHome,
+              )
+            : null,
         actions: [
           IconButton(
             onPressed: _resetSimulation,
@@ -505,10 +561,6 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Kartu Ringkasan Akumulasi Total Muatan (Dimulai dari 0)
-            _buildSummaryMetricsHeader(),
-            const SizedBox(height: 14),
-
             // Banner GPS Live Tracking Real-Time
             _buildGpsTrackingBanner(),
             const SizedBox(height: 14),
@@ -539,7 +591,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Kartu Ringkasan Akumulasi Total Muatan (Selalu Berawal dari 0)
+  // Kartu Ringkasan Akumulasi Total Muatan (Disembunyikan)
+  // ignore: unused_element
   Widget _buildSummaryMetricsHeader() {
     return Container(
       width: double.infinity,
@@ -599,6 +652,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildMetricItem({
     required String label,
     required String value,
