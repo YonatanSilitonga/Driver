@@ -96,9 +96,10 @@ class ApiClient {
     required double longitude,
     required int speed,
     required String status,
+    int koli = 0,
   }) async {
     try {
-      print('📡 [GPS TRACKING] Mengirim koordinat: ($latitude, $longitude) | Status: $status');
+      print('📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli');
       final res = await dio.post(
         '/driver/tracking',
         data: {
@@ -110,6 +111,7 @@ class ApiClient {
           'kecepatan': speed,
           'arah': 0,
           'status': status,
+          'jumlah_koli': koli,
         },
       );
       print('✅ [GPS TRACKING] Berhasil tersimpan di database Supabase: ${res.data}');

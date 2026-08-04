@@ -40,7 +40,7 @@ class CompletedStop {
 
 // Tahapan Status Perjalanan
 enum TripStage {
-  loadingGoods('Bongkar Muat Barang', 'Mengisi jumlah koli & AWB di [Nama Seller]', Icons.inventory_2_outlined),
+  loadingGoods('Bongkar Muat Barang', 'Mengisi jumlah koli di [Nama Seller]', Icons.inventory_2_outlined),
   leavingWarehouse('Keluar Gudang', 'Truk bergerak meninggalkan area [Nama Seller]', Icons.local_shipping_outlined),
   enRoute('Menuju Seller', 'Sedang dalam perjalanan menuju lokasi tujuan', Icons.navigation_outlined),
   arrived('Tiba di Seller', 'Truk telah sampai di titik lokasi tujuan', Icons.location_on_outlined),
@@ -188,16 +188,7 @@ class _HomeScreenState extends State<HomeScreen> {
           // Smart GPS Tracking upload logic
           final now = DateTime.now();
           if (_lastSentTime == null || _lastSentLat == null || _lastSentLng == null) {
-            _lastSentLat = _latitude;
-            _lastSentLng = _longitude;
-            _lastSentTime = now;
-            _lastMovementTime = now;
-            ApiClient.sendTrackingData(
-              latitude: _latitude,
-              longitude: _longitude,
-              speed: 0,
-              status: _currentStageTitle,
-            );
+            _sendInstantTracking();
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
             final lngDiff = (_longitude - _lastSentLng!).abs();
@@ -210,15 +201,7 @@ class _HomeScreenState extends State<HomeScreen> {
               
               final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
               if (secondsSinceLastSent >= 60) {
-                _lastSentLat = _latitude;
-                _lastSentLng = _longitude;
-                _lastSentTime = now;
-                ApiClient.sendTrackingData(
-                  latitude: _latitude,
-                  longitude: _longitude,
-                  speed: 30,
-                  status: _currentStageTitle,
-                );
+                _sendInstantTracking(speed: 30);
               }
             } else {
               final secondsSinceLastMove = now.difference(_lastMovementTime!).inSeconds;
@@ -234,19 +217,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     longitude: _longitude,
                     speed: 0,
                     status: '$_currentStageTitle (Hemat Baterai)',
+                    koli: _currentActualKoli,
                   );
                 }
               } else {
                 if (secondsSinceLastSent >= 60) {
-                  _lastSentLat = _latitude;
-                  _lastSentLng = _longitude;
-                  _lastSentTime = now;
-                  ApiClient.sendTrackingData(
-                    latitude: _latitude,
-                    longitude: _longitude,
-                    speed: 0,
-                    status: _currentStageTitle,
-                  );
+                  _sendInstantTracking();
                 }
               }
             }
@@ -299,6 +275,22 @@ class _HomeScreenState extends State<HomeScreen> {
       _koliInputController.text = '0';
     });
     _startTimer();
+    _sendInstantTracking();
+  }
+
+  void _sendInstantTracking({int speed = 0}) {
+    final now = DateTime.now();
+    _lastSentLat = _latitude;
+    _lastSentLng = _longitude;
+    _lastSentTime = now;
+    _lastMovementTime = now;
+    ApiClient.sendTrackingData(
+      latitude: _latitude,
+      longitude: _longitude,
+      speed: speed,
+      status: _currentStageTitle,
+      koli: _currentActualKoli,
+    );
   }
 
   String get _currentStageTitle {
@@ -355,10 +347,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _confirmAndNextStage() {
     if (_currentStage == TripStage.loadingGoods) {
-      final inputAwb = int.tryParse(_awbInputController.text.trim()) ?? _currentActualAwb;
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
 
-      if (inputAwb <= 0 || inputKoli <= 0) {
+      if (inputKoli <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Row(
@@ -367,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Silahkan isi jumlah koli dan awb yang anda bawa!',
+                    'Silahkan isi jumlah koli yang anda bawa!',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
@@ -442,9 +433,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
-      final inputAwb = int.tryParse(_awbInputController.text.trim()) ?? _currentActualAwb;
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
-      _currentActualAwb = inputAwb;
       _currentActualKoli = inputKoli;
     }
 
@@ -481,6 +470,8 @@ class _HomeScreenState extends State<HomeScreen> {
           break;
       }
     });
+
+    _sendInstantTracking();
   }
 
   void _finishEntireRoute() {
@@ -1371,20 +1362,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
                     ),
                     Text(
-                      'Masukkan jumlah AWB & Koli yang diangkut',
+                      'Masukkan jumlah Koli yang diangkut',
                       style: TextStyle(fontSize: 11, color: Colors.grey),
                     ),
                   ],
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 16),
-          _buildVerticalStepperControl(
-            label: 'Jumlah AWB (Lembar)',
-            controller: _awbInputController,
-            icon: Icons.receipt_long,
-            color: const Color(0xFF0D47A1),
           ),
           const SizedBox(height: 16),
           _buildVerticalStepperControl(
