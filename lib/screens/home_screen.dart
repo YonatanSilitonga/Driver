@@ -196,7 +196,7 @@ class _HomeScreenState extends State<HomeScreen> {
               latitude: _latitude,
               longitude: _longitude,
               speed: 0,
-              status: _currentStage.name,
+              status: _currentStageTitle,
             );
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
@@ -217,7 +217,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   latitude: _latitude,
                   longitude: _longitude,
                   speed: 30,
-                  status: 'berjalan',
+                  status: _currentStageTitle,
                 );
               }
             } else {
@@ -233,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     latitude: _latitude,
                     longitude: _longitude,
                     speed: 0,
-                    status: 'diam',
+                    status: '$_currentStageTitle (Hemat Baterai)',
                   );
                 }
               } else {
@@ -245,7 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     latitude: _latitude,
                     longitude: _longitude,
                     speed: 0,
-                    status: 'diam',
+                    status: _currentStageTitle,
                   );
                 }
               }
@@ -299,6 +299,21 @@ class _HomeScreenState extends State<HomeScreen> {
       _koliInputController.text = '0';
     });
     _startTimer();
+  }
+
+  String get _currentStageTitle {
+    switch (_currentStage) {
+      case TripStage.loadingGoods:
+        return 'Bongkar Muat Barang';
+      case TripStage.leavingWarehouse:
+        return 'Keluar Gudang';
+      case TripStage.enRoute:
+        return 'Menuju ${_currentSeller?.name ?? "Seller"}';
+      case TripStage.arrived:
+        return 'Tiba di ${_currentSeller?.name ?? "Seller"}';
+      case TripStage.completed:
+        return 'Selesai';
+    }
   }
 
   // ignore: unused_element

@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print
+
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -96,11 +98,12 @@ class ApiClient {
     required String status,
   }) async {
     try {
-      await dio.post(
+      print('📡 [GPS TRACKING] Mengirim koordinat: ($latitude, $longitude) | Status: $status');
+      final res = await dio.post(
         '/driver/tracking',
         data: {
-          'id_ritase': 1,
-          'id_kendaraan': 1, // Kendaraan B 9806 UXV
+          'id_ritase': 0,    // 0 menandakan belum ada ritase (disimpan sebagai NULL di Supabase)
+          'id_kendaraan': 2, // Kendaraan B 9806 UXV
           'id_driver': 3,    // Driver AWALUDIN
           'latitude': latitude,
           'longitude': longitude,
@@ -109,8 +112,9 @@ class ApiClient {
           'status': status,
         },
       );
-    } catch (_) {
-      // Abaikan error jaringan untuk background tracking
+      print('✅ [GPS TRACKING] Berhasil tersimpan di database Supabase: ${res.data}');
+    } catch (e) {
+      print('❌ [GPS TRACKING] Gagal mengirim: $e');
     }
   }
 }
