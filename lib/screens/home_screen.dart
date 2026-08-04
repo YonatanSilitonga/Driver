@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
 
 // Model data dummy Seller
 class SellerDummy {
@@ -20,7 +21,7 @@ class SellerDummy {
   });
 }
 
-// Model untuk mencatat Seller yang sudah selesai dikunjungi beserta realisasi muatan
+// Model data Riwayat Stop yang Sudah Selesai
 class CompletedStop {
   final SellerDummy seller;
   final int actualAwb;
@@ -28,7 +29,7 @@ class CompletedStop {
   final int totalDurationSeconds;
   final Map<TripStage, int> stageDurations;
 
-  const CompletedStop({
+  CompletedStop({
     required this.seller,
     required this.actualAwb,
     required this.actualKoli,
@@ -37,13 +38,13 @@ class CompletedStop {
   });
 }
 
-// Status Tahapan Perjalanan (Shopee Food Style)
+// Tahapan Status Perjalanan
 enum TripStage {
-  loadingGoods('Sedang Bongkar Muat Barang', 'Input muatan AWB & Koli dari seller ini', Icons.inventory_2_outlined),
-  leavingWarehouse('Sedang Keluar Gudang', 'Armada siap berangkat meninggalkan area gudang', Icons.local_shipping_outlined),
-  enRoute('Sedang Menuju ke Seller', 'Driver dalam perjalanan menuju lokasi seller', Icons.directions_car_outlined),
-  arrived('Tiba di Seller', 'Driver telah sampai dan proses serah terima barang', Icons.storefront_outlined),
-  completed('Selesai Penjemputan', 'Penjemputan di seller ini telah diselesaikan', Icons.check_circle_outline);
+  loadingGoods('Bongkar Muat Barang', 'Mengisi jumlah koli & AWB di [Nama Seller]', Icons.inventory_2_outlined),
+  leavingWarehouse('Keluar Gudang', 'Truk bergerak meninggalkan area [Nama Seller]', Icons.local_shipping_outlined),
+  enRoute('Menuju Seller', 'Sedang dalam perjalanan menuju lokasi tujuan', Icons.navigation_outlined),
+  arrived('Tiba di Seller', 'Truk telah sampai di titik lokasi tujuan', Icons.location_on_outlined),
+  completed('Selesai', 'Seluruh rangkaian penjemputan selesai', Icons.check_circle_outline);
 
   final String title;
   final String subtitle;
@@ -59,31 +60,31 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Master Data Dummy Seller
-  final List<SellerDummy> _allSellers = const [
+  // Master Data Seller (Loaded dynamically from Backend Database)
+  List<SellerDummy> _allSellers = const [
     SellerDummy(
       id: 'S01',
-      name: 'Seller A - PT Elektronik Nusantara',
-      address: 'Kawasan Industri Cikarang Blok B-12, Kab. Bekasi',
-      phone: '0812-3456-7890',
-      estimatedAwb: 25,
-      totalKoli: 18,
+      name: 'SKI',
+      address: 'Jl. Pajajaran XIV No.62, RT.005/RW.005, Gandasari, Kec. Jatiuwung, Kota Tangerang',
+      phone: '-',
+      estimatedAwb: 20,
+      totalKoli: 15,
     ),
     SellerDummy(
       id: 'S02',
-      name: 'Seller B - Toko Komputer Jaya',
-      address: 'Harco Mangga Dua, Lt. 2 No. 45, Jakarta Pusat',
-      phone: '0815-9876-5432',
-      estimatedAwb: 15,
-      totalKoli: 12,
+      name: 'TITIP AJA',
+      address: 'RMM9+49Q, RT.002/RW.003, Poris Plawad, Kec. Batuceper, Kota Tangerang',
+      phone: '-',
+      estimatedAwb: 20,
+      totalKoli: 15,
     ),
     SellerDummy(
       id: 'S03',
-      name: 'Seller C - Gudang Fashion Maju',
-      address: 'Kawasan Marunda Hub 3, Cilincing, Jakarta Utara',
-      phone: '0821-1122-3344',
-      estimatedAwb: 35,
-      totalKoli: 25,
+      name: 'Gateway Tangerang',
+      address: 'Gateway Sorting Center Hub - Kota Tangerang, Banten 15111',
+      phone: '-',
+      estimatedAwb: 20,
+      totalKoli: 15,
     ),
   ];
 
@@ -105,12 +106,63 @@ class _HomeScreenState extends State<HomeScreen> {
   // Timer & Real-time Location Tracking State
   Timer? _stopwatchTimer;
   int _activeStageSeconds = 0;
+  // ignore: unused_field
   int _totalTripSeconds = 0;
   final Map<TripStage, int> _currentStageDurations = {};
 
   // Dummy Live GPS Coordinates
   double _latitude = -6.312845;
   double _longitude = 107.164532;
+
+  // Smart tracking state variables
+  double? _lastSentLat;
+  double? _lastSentLng;
+  DateTime? _lastMovementTime;
+  DateTime? _lastSentTime;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchSellersFromBackend();
+  }
+
+  Future<void> _fetchSellersFromBackend() async {
+    try {
+      final response = await ApiClient.dio.get('/sellers');
+      if (response.data['success'] == true) {
+        final List list = response.data['data'] as List;
+        if (list.isNotEmpty && mounted) {
+          final fetched = list.map((item) {
+            return SellerDummy(
+              id: item['id'].toString(),
+              name: item['name']?.toString() ?? '',
+              address: item['address']?.toString() ?? '',
+              phone: item['no_hp']?.toString() ?? '-',
+              estimatedAwb: 20,
+              totalKoli: 15,
+            );
+          }).toList();
+
+          // Urutkan Rute Khusus AWALUDIN: 1. SKI -> 2. TITIP AJA -> 3. Gateway Tangerang
+          final routeOrder = ['SKI', 'TITIP AJA', 'Gateway'];
+          fetched.sort((a, b) {
+            final idxA = routeOrder.indexWhere((name) => a.name.toUpperCase().contains(name.toUpperCase()));
+            final idxB = routeOrder.indexWhere((name) => b.name.toUpperCase().contains(name.toUpperCase()));
+            if (idxA != -1 && idxB != -1) return idxA.compareTo(idxB);
+            if (idxA != -1) return -1;
+            if (idxB != -1) return 1;
+            return 0;
+          });
+
+          setState(() {
+            _allSellers = fetched;
+          });
+        }
+      }
+    } catch (_) {
+      // Fallback ke dummy list jika backend offline
+    }
+  }
 
   @override
   void dispose() {
@@ -132,6 +184,73 @@ class _HomeScreenState extends State<HomeScreen> {
           // Simulasi pergerakan GPS kecil secara real-time
           _latitude += 0.000012;
           _longitude += 0.000018;
+
+          // Smart GPS Tracking upload logic
+          final now = DateTime.now();
+          if (_lastSentTime == null || _lastSentLat == null || _lastSentLng == null) {
+            _lastSentLat = _latitude;
+            _lastSentLng = _longitude;
+            _lastSentTime = now;
+            _lastMovementTime = now;
+            ApiClient.sendTrackingData(
+              latitude: _latitude,
+              longitude: _longitude,
+              speed: 0,
+              status: _currentStage.name,
+            );
+          } else {
+            final latDiff = (_latitude - _lastSentLat!).abs();
+            final lngDiff = (_longitude - _lastSentLng!).abs();
+            
+            final bool isMoving = (latDiff > 0.00005 || lngDiff > 0.00005) &&
+                (_currentStage == TripStage.leavingWarehouse || _currentStage == TripStage.enRoute);
+
+            if (isMoving) {
+              _lastMovementTime = now;
+              
+              final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
+              if (secondsSinceLastSent >= 60) {
+                _lastSentLat = _latitude;
+                _lastSentLng = _longitude;
+                _lastSentTime = now;
+                ApiClient.sendTrackingData(
+                  latitude: _latitude,
+                  longitude: _longitude,
+                  speed: 30,
+                  status: 'berjalan',
+                );
+              }
+            } else {
+              final secondsSinceLastMove = now.difference(_lastMovementTime!).inSeconds;
+              final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
+
+              if (secondsSinceLastMove >= 300) {
+                if (secondsSinceLastSent >= 300) {
+                  _lastSentLat = _latitude;
+                  _lastSentLng = _longitude;
+                  _lastSentTime = now;
+                  ApiClient.sendTrackingData(
+                    latitude: _latitude,
+                    longitude: _longitude,
+                    speed: 0,
+                    status: 'diam',
+                  );
+                }
+              } else {
+                if (secondsSinceLastSent >= 60) {
+                  _lastSentLat = _latitude;
+                  _lastSentLng = _longitude;
+                  _lastSentTime = now;
+                  ApiClient.sendTrackingData(
+                    latitude: _latitude,
+                    longitude: _longitude,
+                    speed: 0,
+                    status: 'diam',
+                  );
+                }
+              }
+            }
+          }
         }
       });
     });
@@ -161,23 +280,31 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Dapatkan daftar seller yang BELUM dikunjungi
   List<SellerDummy> get _availableSellers {
     final visitedIds = _completedStops.map((stop) => stop.seller.id).toSet();
     return _allSellers.where((seller) => !visitedIds.contains(seller.id)).toList();
   }
 
+  void _startTripDirectly(SellerDummy seller) {
+    setState(() {
+      _currentSeller = seller;
+      _isTripStarted = true;
+      _currentStage = TripStage.loadingGoods;
+      _activeStageSeconds = 0;
+      _currentStageDurations.clear();
+
+      _currentActualAwb = 0;
+      _currentActualKoli = 0;
+      _awbInputController.text = '0';
+      _koliInputController.text = '0';
+    });
+    _startTimer();
+  }
+
+  // ignore: unused_element
   void _showSellerSelectionSheet() {
     final available = _availableSellers;
-    if (available.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Semua seller dalam daftar telah dikunjungi!'),
-          backgroundColor: Color(0xFF0D47A1),
-        ),
-      );
-      return;
-    }
+    if (available.isEmpty) return;
 
     showModalBottomSheet(
       context: context,
@@ -194,121 +321,13 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.grey[300],
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    _completedStops.isEmpty
-                        ? 'Pilih Seller Tujuan Pertama'
-                        : 'Pilih Seller Tujuan Berikutnya (Stop #${_completedStops.length + 1})',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF0D47A1),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Pilih lokasi penjemputan barang selanjutnya',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  const SizedBox(height: 16),
-                  ...available.map((seller) {
-                    final isSelected = tempSelected?.id == seller.id;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      decoration: BoxDecoration(
-                        color: isSelected ? const Color(0xFF0D47A1).withValues(alpha: 0.05) : Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isSelected ? const Color(0xFF0D47A1) : Colors.grey.shade300,
-                          width: isSelected ? 1.5 : 1,
-                        ),
-                      ),
-                      child: InkWell(
-                        onTap: () {
-                          setSheetState(() => tempSelected = seller);
-                        },
-                        borderRadius: BorderRadius.circular(12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12.0),
-                          child: Row(
-                            children: [
-                              Icon(
-                                isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
-                                color: isSelected ? const Color(0xFF0D47A1) : Colors.grey,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      seller.name,
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(seller.address, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Estimasi: ${seller.estimatedAwb} AWB / ${seller.totalKoli} Koli',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFFFF8F00),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        setState(() {
-                          _currentSeller = tempSelected;
-                          _isTripStarted = true;
-                          _currentStage = TripStage.loadingGoods;
-                          _activeStageSeconds = 0;
-                          _currentStageDurations.clear();
-
-                          // Inisialisasi awal selalu 0 (kosong) untuk driver
-                          _currentActualAwb = 0;
-                          _currentActualKoli = 0;
-                          _awbInputController.text = '0';
-                          _koliInputController.text = '0';
-                        });
-                        _startTimer();
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0D47A1),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: Text(
-                        _completedStops.isEmpty ? 'Mulai Perjalanan Rute' : 'Lanjut Perjalanan Ke Seller Ini',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                      ),
-                    ),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _startTripDirectly(tempSelected);
+                    },
+                    child: const Text('Lanjut'),
                   ),
                 ],
               ),
@@ -320,12 +339,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _confirmAndNextStage() {
-    // Pengecekan Validasi saat di tahap loadingGoods
     if (_currentStage == TripStage.loadingGoods) {
       final inputAwb = int.tryParse(_awbInputController.text.trim()) ?? _currentActualAwb;
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
 
-      // Jika jumlah AWB <= 0 ATAU Koli <= 0, tampilkan peringatan & gagalkan lanjut
       if (inputAwb <= 0 || inputKoli <= 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -347,11 +364,10 @@ class _HomeScreenState extends State<HomeScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
-        return; // Hentikan alur, jangan tampilkan dialog
+        return;
       }
     }
 
-    // Tampilkan Dialog Konfirmasi sebelum update status
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) {
@@ -418,9 +434,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
-      // Simpan durasi kegiatan yang baru saja diselesaikan
       _currentStageDurations[_currentStage] = _activeStageSeconds;
-      _activeStageSeconds = 0; // Reset timer untuk kegiatan berikutnya
+      _activeStageSeconds = 0;
 
       switch (_currentStage) {
         case TripStage.loadingGoods:
@@ -434,7 +449,6 @@ class _HomeScreenState extends State<HomeScreen> {
           break;
         case TripStage.arrived:
           _currentStage = TripStage.completed;
-          // Masukkan ke riwayat CompletedStop beserta realisasi AWB & Koli
           if (_currentSeller != null) {
             final stopTotalDuration = _currentStageDurations.values.fold(0, (sum, dur) => sum + dur);
             _completedStops.add(
@@ -477,14 +491,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$minutes mnt $remainingSeconds dtk';
   }
 
-  int get _totalAwbCollected {
-    return _completedStops.fold(0, (sum, stop) => sum + stop.actualAwb);
-  }
-
-  int get _totalKoliCollected {
-    return _completedStops.fold(0, (sum, stop) => sum + stop.actualKoli);
-  }
-
   void _handleBackToHome() {
     showDialog(
       context: context,
@@ -524,7 +530,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               child: const Text(
-                'Ya, Beranda',
+                'Ya, Kembali',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -561,13 +567,54 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Sederhana: Hai, AWALUDIN! (Tampil saat di Beranda)
+            if (!_isTripStarted) ...[
+              const Text(
+                'Hai, AWALUDIN!',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              const SizedBox(height: 14),
+              _buildVehicleCard(),
+              const SizedBox(height: 14),
+            ],
+
             // Banner GPS Live Tracking Real-Time
             _buildGpsTrackingBanner(),
             const SizedBox(height: 14),
 
-            // Banner Gudang Outgoing
+            // Banner Gudang Outgoing Utama
             _buildWarehouseCard(),
             const SizedBox(height: 16),
+
+            // Tombol Mulai Perjalanan langsung di bawah Asal Gudang (saat di Beranda)
+            if (!_isTripStarted) ...[
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    if (_allSellers.isNotEmpty) {
+                      _startTripDirectly(_allSellers.first);
+                    }
+                  },
+                  icon: const Icon(Icons.play_arrow_rounded, size: 26),
+                  label: const Text(
+                    'Mulai Perjalanan',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0D47A1),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 2,
+                  ),
+                ),
+              ),
+            ],
 
             // Ringkasan Riwayat Seller yang Sudah Dikunjungi (Jika Ada)
             if (_completedStops.isNotEmpty) ...[
@@ -576,100 +623,18 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
 
             // Tampilan Berdasarkan Status Perjalanan
-            if (!_isTripStarted) ...[
-              _buildStartTripCard(),
-            ] else if (_isEntireRouteCompleted) ...[
-              _buildEntireRouteCompletedCard(),
-            ] else ...[
-              _buildActiveTripSellerCard(),
-              const SizedBox(height: 16),
-              _buildTimelineStatusCard(),
+            if (_isTripStarted) ...[
+              if (_isEntireRouteCompleted) ...[
+                _buildEntireRouteCompletedCard(),
+              ] else ...[
+                _buildActiveTripSellerCard(),
+                const SizedBox(height: 16),
+                _buildTimelineStatusCard(),
+              ],
             ],
           ],
         ),
       ),
-    );
-  }
-
-  // Kartu Ringkasan Akumulasi Total Muatan (Disembunyikan)
-  // ignore: unused_element
-  Widget _buildSummaryMetricsHeader() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF0D47A1).withValues(alpha: 0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Ringkasan Muatan Perjalanan',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildMetricItem(
-                  label: 'Total AWB',
-                  value: '$_totalAwbCollected Resi',
-                  icon: Icons.confirmation_number_outlined,
-                  color: const Color(0xFF0D47A1),
-                ),
-              ),
-              Container(height: 30, width: 1, color: Colors.grey[300]),
-              Expanded(
-                child: _buildMetricItem(
-                  label: 'Total KOLI',
-                  value: '$_totalKoliCollected Paket',
-                  icon: Icons.inventory_2_outlined,
-                  color: const Color(0xFFFF8F00),
-                ),
-              ),
-              Container(height: 30, width: 1, color: Colors.grey[300]),
-              Expanded(
-                child: _buildMetricItem(
-                  label: 'Seller Selesai',
-                  value: '${_completedStops.length} Stop',
-                  icon: Icons.storefront_outlined,
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ignore: unused_element
-  Widget _buildMetricItem({
-    required String label,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey[900]),
-        ),
-      ],
     );
   }
 
@@ -720,6 +685,109 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Kotak Informasi Kendaraan yang dikendarai (Plat: B 9806 UXV)
+  Widget _buildVehicleCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF0D47A1).withValues(alpha: 0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.local_shipping_outlined, color: Color(0xFF0D47A1), size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Kendaraan Operasional',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.green[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green.shade300),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green, size: 12),
+                    SizedBox(width: 4),
+                    Text(
+                      'Tersedia',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.green),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'B 9806 UXV',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.yellow,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Jenis: CDDL',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Kapasitas: 7.000 kg (7 Ton)',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // Card Informasi Gudang Outgoing
   Widget _buildWarehouseCard() {
     return Container(
@@ -748,67 +816,20 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Icon(Icons.warehouse_outlined, color: Color(0xFF0D47A1), size: 28),
           ),
           const SizedBox(width: 12),
-          Expanded(
+          const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Asal: Gudang Outgoing Utama',
+                Text(
+                  'Asal Gudang',
+                  style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Gudang Outgoing Utama',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0D47A1)),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Hub Outgoing Cikarang Pusat - Bekasi',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Card Mulai Keberangkatan (Awal)
-  Widget _buildStartTripCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF0D47A1), width: 1.5),
-      ),
-      child: Column(
-        children: [
-          const Icon(Icons.directions_run_outlined, size: 48, color: Color(0xFF0D47A1)),
-          const SizedBox(height: 12),
-          const Text(
-            'Siap Berangkat dari Gudang?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Tekan tombol di bawah untuk memilih seller tujuan penjemputan paket pertama.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              onPressed: _showSellerSelectionSheet,
-              icon: const Icon(Icons.arrow_forward),
-              label: const Text(
-                'Berangkat & Pilih Seller Pertama',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0D47A1),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
             ),
           ),
         ],
@@ -837,41 +858,32 @@ class _HomeScreenState extends State<HomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.check_circle_outline, color: Colors.green, size: 20),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Riwayat Penjemputan (${_completedStops.length} Seller)',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.green),
-                  ),
-                ],
-              ),
+              const Icon(Icons.verified, color: Colors.green, size: 20),
+              const SizedBox(width: 8),
               Text(
-                '$_totalAwbCollected AWB / $_totalKoliCollected Koli',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey[800]),
+                'Riwayat Penjemputan Selesai (${_completedStops.length})',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.green),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          const Divider(height: 1),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           ..._completedStops.asMap().entries.map((entry) {
             final idx = entry.key + 1;
             final stop = entry.value;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8.0),
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(10),
+              ),
               child: Row(
                 children: [
                   Container(
                     width: 22,
                     height: 22,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
+                    decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
                     child: Center(
                       child: Text(
                         '$idx',
@@ -935,7 +947,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                 ),
               ),
-// Total timer disembunyikan
             ],
           ),
           const SizedBox(height: 10),
@@ -1027,16 +1038,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
             String stageTitle = stage.title;
             if (stage == TripStage.enRoute) {
-              stageTitle = 'Sedang Menuju ke ${_currentSeller?.id ?? "Seller"}';
+              stageTitle = 'Sedang Menuju ke ${_currentSeller?.name ?? "Seller"}';
             } else if (stage == TripStage.arrived) {
-              stageTitle = 'Tiba di ${_currentSeller?.id ?? "Seller"}';
+              stageTitle = 'Tiba di ${_currentSeller?.name ?? "Seller"}';
             }
 
             return IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Timeline Node (Dot & Line)
                   Column(
                     children: [
                       Container(
@@ -1070,7 +1080,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const SizedBox(width: 12),
-                  // Timeline Text Content & Log Durasi
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.only(bottom: 20.0),
@@ -1080,28 +1089,24 @@ class _HomeScreenState extends State<HomeScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Expanded(
-                                child: Text(
-                                  stageTitle,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: (isCurrent || isPassed) ? FontWeight.bold : FontWeight.normal,
-                                    color: isCurrent
-                                        ? const Color(0xFF0D47A1)
-                                        : isPassed
-                                            ? Colors.green[800]
-                                            : Colors.grey[600],
-                                  ),
+                              Text(
+                                stageTitle,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
+                                  color: isPassed
+                                      ? Colors.green[800]
+                                      : isCurrent
+                                          ? const Color(0xFF0D47A1)
+                                          : Colors.grey[700],
                                 ),
                               ),
-                              // Lencana Durasi Kegiatan yang Sudah Selesai
-                              if (isPassed && durationInSec != null)
+                              if (durationInSec != null)
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                   decoration: BoxDecoration(
-                                    color: Colors.green.shade50,
+                                    color: Colors.green[50],
                                     borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(color: Colors.green.shade300),
                                   ),
                                   child: Row(
                                     children: [
@@ -1118,7 +1123,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ],
                                   ),
                                 ),
-// Live timer per-stage dihapus (1 timer saja di header)
                             ],
                           ),
                           const SizedBox(height: 2),
@@ -1196,7 +1200,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton.icon(
-                  onPressed: _showSellerSelectionSheet,
+                  onPressed: () {
+                    if (_availableSellers.isNotEmpty) {
+                      _startTripDirectly(_availableSellers.first);
+                    }
+                  },
                   icon: const Icon(Icons.add_location_alt_outlined),
                   label: const Text(
                     'Lanjut ke Seller Berikutnya',
@@ -1255,12 +1263,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Hitung Barang Masuk Truk',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
+                      'Input Realisasi Muatan Barang',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
                     ),
                     Text(
-                      'Tekan tombol (+) atau (-) untuk isi jumlah AWB & Koli (Wajib > 0)',
-                      style: TextStyle(fontSize: 11, color: Colors.black87),
+                      'Masukkan jumlah AWB & Koli yang diangkut',
+                      style: TextStyle(fontSize: 11, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -1268,220 +1276,120 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 16),
-
-          // Stepper AWB (Resi)
-          _buildStepperRow(
-            label: 'Jumlah AWB (Resi)',
-            icon: Icons.confirmation_number_outlined,
-            value: _currentActualAwb,
+          _buildVerticalStepperControl(
+            label: 'Jumlah AWB (Lembar)',
             controller: _awbInputController,
-            onDecrement: () {
-              if (_currentActualAwb > 0) {
-                setState(() {
-                  _currentActualAwb--;
-                  _awbInputController.text = '$_currentActualAwb';
-                });
-              }
-            },
-            onIncrement: () {
-              setState(() {
-                _currentActualAwb++;
-                _awbInputController.text = '$_currentActualAwb';
-              });
-            },
-            onChanged: (val) {
-              final parsed = int.tryParse(val);
-              if (parsed != null) {
-                setState(() => _currentActualAwb = parsed);
-              }
-            },
+            icon: Icons.receipt_long,
+            color: const Color(0xFF0D47A1),
           ),
-
-          const SizedBox(height: 14),
-          const Divider(height: 1),
-          const SizedBox(height: 14),
-
-          // Stepper KOLI (Paket)
-          _buildStepperRow(
-            label: 'Jumlah KOLI (Paket)',
-            icon: Icons.inventory_2_outlined,
-            value: _currentActualKoli,
+          const SizedBox(height: 16),
+          _buildVerticalStepperControl(
+            label: 'Jumlah Koli (Box/Paket)',
             controller: _koliInputController,
-            onDecrement: () {
-              if (_currentActualKoli > 0) {
-                setState(() {
-                  _currentActualKoli--;
-                  _koliInputController.text = '$_currentActualKoli';
-                });
-              }
-            },
-            onIncrement: () {
-              setState(() {
-                _currentActualKoli++;
-                _koliInputController.text = '$_currentActualKoli';
-              });
-            },
-            onChanged: (val) {
-              final parsed = int.tryParse(val);
-              if (parsed != null) {
-                setState(() => _currentActualKoli = parsed);
-              }
-            },
+            icon: Icons.inventory_2,
+            color: const Color(0xFFFF8F00),
           ),
         ],
       ),
     );
   }
 
-  // Stepper Driver-Friendly: Label di atas, tombol +/- di bawah (tidak overflow)
-  Widget _buildStepperRow({
+  Widget _buildVerticalStepperControl({
     required String label,
-    required IconData icon,
-    required int value,
     required TextEditingController controller,
-    required VoidCallback onDecrement,
-    required VoidCallback onIncrement,
-    required ValueChanged<String> onChanged,
+    required IconData icon,
+    required Color color,
   }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Label di atas
-        Row(
-          children: [
-            Icon(icon, size: 18, color: const Color(0xFF0D47A1)),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-
-        // Stepper controls di bawah label, centered
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // Tombol Kurang (-) Besar
-            InkWell(
-              onTap: onDecrement,
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: Colors.red[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.red.shade300, width: 1.5),
-                ),
-                child: const Icon(Icons.remove, color: Colors.red, size: 28),
-              ),
-            ),
-            const SizedBox(width: 16),
-
-            // Angka tengah (bisa diketik)
-            SizedBox(
-              width: 80,
-              height: 52,
-              child: TextField(
-                controller: controller,
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0D47A1),
-                ),
-                decoration: InputDecoration(
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: Colors.grey.shade400),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: Color(0xFF0D47A1), width: 2),
-                  ),
-                ),
-                onChanged: onChanged,
-              ),
-            ),
-            const SizedBox(width: 16),
-
-            // Tombol Tambah (+) Besar
-            InkWell(
-              onTap: onIncrement,
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: Colors.green[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.green.shade400, width: 1.5),
-                ),
-                child: const Icon(Icons.add, color: Colors.green, size: 28),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  // Card Ringkasan saat Seluruh Rute Multi-Seller Selesai
-  Widget _buildEntireRouteCompletedCard() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.green[50],
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green.shade400, width: 1.5),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade300),
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events_outlined, size: 56, color: Colors.green),
-          const SizedBox(height: 12),
-          const Text(
-            'Seluruh Rute Berhasil Diselesaikan!',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.green),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Anda telah menyelesaikan penjemputan di ${_completedStops.length} Seller dengan total $_totalAwbCollected AWB dan $_totalKoliCollected Koli barang.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.grey[800]),
+          Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
-          Text(
-            'Total Waktu Operasional: ${_formatReadableDuration(_totalTripSeconds)}',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.green[900]),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              onPressed: _resetSimulation,
-              icon: const Icon(Icons.refresh),
-              label: const Text(
-                'Mulai Perjalanan Rute Baru',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Material(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: () {
+                    int val = int.tryParse(controller.text.trim()) ?? 0;
+                    if (val > 0) {
+                      setState(() {
+                        controller.text = (val - 1).toString();
+                      });
+                    }
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.red.shade300),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.remove, color: Colors.red, size: 28),
+                  ),
+                ),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              const SizedBox(width: 16),
+              SizedBox(
+                width: 90,
+                child: TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.black87,
+                  ),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    border: InputBorder.none,
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(width: 16),
+              Material(
+                color: Colors.green[50],
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: () {
+                    int val = int.tryParse(controller.text.trim()) ?? 0;
+                    setState(() {
+                      controller.text = (val + 1).toString();
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.green.shade300),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.add, color: Colors.green, size: 28),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -1491,15 +1399,65 @@ class _HomeScreenState extends State<HomeScreen> {
   String _getNextStageButtonLabel() {
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Konfirmasi & Keluar Gudang';
+        return 'Selesai Muat -> Keluar Gudang';
       case TripStage.leavingWarehouse:
-        return 'Update: Menuju ke Seller';
+        return 'Keluar Gudang -> Menuju Seller';
       case TripStage.enRoute:
-        return 'Update: Tiba di Seller';
+        return 'Tiba di Lokasi Seller';
       case TripStage.arrived:
         return 'Selesaikan Penjemputan Seller Ini';
       case TripStage.completed:
-        return 'Selesai';
+        return 'Penjemputan Selesai';
     }
+  }
+
+  Widget _buildEntireRouteCompletedCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.green.shade400, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.green.withValues(alpha: 0.1),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.emoji_events, color: Colors.green, size: 56),
+          const SizedBox(height: 12),
+          const Text(
+            'Seluruh Perjalanan Selesai!',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Terima kasih! Seluruh seller dalam rute penugasan telah berhasil dikunjungi.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: _resetSimulation,
+            icon: const Icon(Icons.home),
+            label: const Text(
+              'Kembali ke Beranda Utama',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green[700],
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 48),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

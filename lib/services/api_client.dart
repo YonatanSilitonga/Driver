@@ -2,10 +2,12 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  static const String _baseUrl = 'http://127.0.0.1:8000/api/v1';
+  static const String _defaultUrl = 'http://127.0.0.1:8081/api/v1';
+  static const String _fallbackUrl = 'http://192.168.20.244:8081/api/v1';
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
+  static String _activeBaseUrl = _defaultUrl;
 
   static Dio get dio {
     _dio ??= _createDio();
@@ -15,14 +17,14 @@ class ApiClient {
   static Dio _createDio() {
     final dio = Dio(
       BaseOptions(
-        baseUrl: _baseUrl,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 15),
+        baseUrl: _activeBaseUrl,
+        connectTimeout: const Duration(seconds: 8),
+        receiveTimeout: const Duration(seconds: 12),
         headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
       ),
     );
 
-    // Interceptor: otomatis tambah token di setiap request
+    // Interceptor: otomatis tambah token & fallback IP jika ADB Reverse terputus
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
@@ -32,7 +34,27 @@ class ApiClient {
           }
           handler.next(options);
         },
-        onError: (DioException e, handler) {
+        onError: (DioException e, handler) async {
+          if ((e.type == DioExceptionType.connectionTimeout ||
+                  e.type == DioExceptionType.connectionError) &&
+              _activeBaseUrl == _defaultUrl) {
+            // Coba fallback otomatis ke IP Wi-Fi laptop (192.168.20.244)
+            _activeBaseUrl = _fallbackUrl;
+            _dio = null;
+            try {
+              final opts = e.requestOptions;
+              final response = await ApiClient.dio.request(
+                opts.path,
+                data: opts.data,
+                queryParameters: opts.queryParameters,
+                options: Options(
+                  method: opts.method,
+                  headers: opts.headers,
+                ),
+              );
+              return handler.resolve(response);
+            } catch (_) {}
+          }
           handler.next(e);
         },
       ),
@@ -64,5 +86,31 @@ class ApiClient {
   static Future<bool> isLoggedIn() async {
     final token = await getToken();
     return token != null && token.isNotEmpty;
+  }
+
+  // Kirim data GPS tracking driver ke server
+  static Future<void> sendTrackingData({
+    required double latitude,
+    required double longitude,
+    required int speed,
+    required String status,
+  }) async {
+    try {
+      await dio.post(
+        '/driver/tracking',
+        data: {
+          'id_ritase': 1,
+          'id_kendaraan': 1, // Kendaraan B 9806 UXV
+          'id_driver': 3,    // Driver AWALUDIN
+          'latitude': latitude,
+          'longitude': longitude,
+          'kecepatan': speed,
+          'arah': 0,
+          'status': status,
+        },
+      );
+    } catch (_) {
+      // Abaikan error jaringan untuk background tracking
+    }
   }
 }
