@@ -35,7 +35,9 @@ class _LoginScreenState extends State<LoginScreen> {
           if (user != null) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Selamat datang, ${user['username'] ?? 'Driver'}!'),
+                content: Text(
+                  'Selamat datang, ${user['username'] ?? 'Driver'}!',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -49,10 +51,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (mounted) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(e.toString()),
-              backgroundColor: Colors.red,
-            ),
+            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
           );
         }
       }
@@ -86,11 +85,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: const Color(0xFF0D47A1),
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Icon(Icons.hub_outlined, color: Colors.white, size: 40),
+                      child: const Icon(
+                        Icons.hub_outlined,
+                        color: Colors.white,
+                        size: 40,
+                      ),
                     ),
                     const SizedBox(height: 20),
                     const Text(
-                      'Tower Control',
+                      'MustGo',
                       style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
@@ -111,11 +114,15 @@ class _LoginScreenState extends State<LoginScreen> {
               // Form Header
               const Text(
                 'Login',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87),
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
-                'Tekan tombol Masuk secara langsung untuk menguji aplikasi',
+                'Silahkan isi kolom username dan password anda',
                 style: TextStyle(fontSize: 13, color: Colors.grey[600]),
               ),
               const SizedBox(height: 24),
@@ -125,9 +132,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _emailController,
                 keyboardType: TextInputType.emailAddress,
                 decoration: InputDecoration(
-                  labelText: 'Username / Email',
+                  labelText: 'Username anda',
                   prefixIcon: const Icon(Icons.person_outline),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   filled: true,
                   fillColor: Colors.white,
                 ),
@@ -139,13 +148,20 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _passwordController,
                 obscureText: _obscurePassword,
                 decoration: InputDecoration(
-                  labelText: 'Password (Opsional)',
+                  labelText: 'Password anda',
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   filled: true,
                   fillColor: Colors.white,
                 ),
@@ -161,18 +177,26 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0D47A1),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     elevation: 2,
                   ),
                   child: _isLoading
                       ? const SizedBox(
                           width: 24,
                           height: 24,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.5,
+                          ),
                         )
                       : const Text(
                           'Masuk',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                 ),
               ),

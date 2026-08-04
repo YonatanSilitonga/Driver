@@ -638,48 +638,137 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Banner Indikator GPS Live Tracking Real-Time
+  // Card GPS Live Tracking Real-Time dengan Indikator Mode Smart Interval
   Widget _buildGpsTrackingBanner() {
     final isActive = _isTripStarted && !_isEntireRouteCompleted;
+    final now = DateTime.now();
+    final secondsSinceLastMove = _lastMovementTime != null ? now.difference(_lastMovementTime!).inSeconds : 0;
+    final isBatterySaver = isActive && secondsSinceLastMove >= 300 && 
+        (_currentStage == TripStage.loadingGoods || _currentStage == TripStage.arrived);
+
+    final String modeLabel = !isActive
+        ? 'Standby'
+        : (isBatterySaver ? 'Hemat Baterai (5 mnt)' : 'Real-time (1 mnt)');
+
+    final Color statusColor = !isActive
+        ? Colors.grey
+        : (isBatterySaver ? const Color(0xFFFF8F00) : Colors.green.shade700);
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isActive ? Colors.green[50] : Colors.grey[100],
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isActive ? Colors.green.shade400 : Colors.grey.shade300,
-        ),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: statusColor.withValues(alpha: 0.3), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+            color: statusColor.withValues(alpha: 0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 10,
-            height: 10,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isActive ? Colors.green : Colors.grey,
-            ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.satellite_alt_rounded, color: statusColor, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'GPS Smart Tracking',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[900],
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            modeLabel,
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: statusColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isActive
+                          ? (isBatterySaver
+                              ? 'Armada diam > 5 mnt. Interval pengiriman 5 mnt (hemat baterai)'
+                              : 'Armada bergerak. Mengirim koordinat setiap 1 mnt')
+                          : 'GPS dalam posisi siaga. Tekan Mulai Perjalanan.',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Text(
-            isActive ? 'GPS Live Tracking: Aktif' : 'GPS Live Tracking: Standby',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: isActive ? Colors.green[800] : Colors.grey[700],
+          if (isActive) ...[
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.my_location, size: 14, color: Color(0xFF0D47A1)),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${_latitude.toStringAsFixed(6)}, ${_longitude.toStringAsFixed(6)}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Icon(Icons.speed, size: 14, color: Colors.grey),
+                    const SizedBox(width: 4),
+                    Text(
+                      (_currentStage == TripStage.leavingWarehouse || _currentStage == TripStage.enRoute)
+                          ? '30 km/h (Berjalan)'
+                          : '0 km/h (Berdiam)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ),
-          const Spacer(),
-          Text(
-            '${_latitude.toStringAsFixed(6)}, ${_longitude.toStringAsFixed(6)}',
-            style: const TextStyle(
-              fontSize: 11,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
+          ],
         ],
       ),
     );
