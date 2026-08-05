@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/api_client.dart';
 import 'main_layout.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -33,6 +34,32 @@ class _LoginScreenState extends State<LoginScreen> {
         if (mounted) {
           setState(() => _isLoading = false);
           if (user != null) {
+            // Set identitas tracking dari akun yang login (bukan hardcode AWALUDIN)
+            try {
+              final cfg = await ApiClient.loadDriverConfig();
+              final idDriver = ((user['id_driver'] as num?)?.toInt() ?? cfg['id_driver'] ?? 0);
+              var idKendaraan = cfg['id_kendaraan'] ?? 2;
+              // Coba ambil kendaraan dari ritase driver yang login (scoped oleh backend)
+              try {
+                final res = await ApiClient.dio.get('/armada/ritase');
+                final list = res.data?['data'] as List? ?? [];
+                if (list.isNotEmpty) {
+                  final first = list.first as Map? ?? {};
+                  final kid = (first['id_kendaraan'] as num?)?.toInt();
+                  if (kid != null && kid > 0) idKendaraan = kid;
+                }
+              } catch (_) {/* fallback ke config */}
+              await ApiClient.saveDriverConfig(
+                idDriver: idDriver,
+                idKendaraan: idKendaraan,
+                idRitase: 0,
+              );
+              // ignore: avoid_print
+              print('✅ Tracking identity -> id_driver=$idDriver, id_kendaraan=$idKendaraan');
+            } catch (e) {
+              // ignore: avoid_print
+              print('⚠️ Gagal set config tracking: $e');
+            }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
