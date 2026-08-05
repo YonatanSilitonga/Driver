@@ -184,4 +184,36 @@ class ApiClient {
       print('❌ [STATUS] Gagal mengirim: $e');
     }
   }
+
+  // Ambil daftar kendaraan dari API Backend
+  static Future<List<dynamic>> fetchVehicles() async {
+    try {
+      final response = await dio.get('/vehicles');
+      if (response.data != null && response.data['success'] == true) {
+        return response.data['data'] ?? [];
+      } else if (response.data is List) {
+        return response.data;
+      }
+    } catch (e) {
+      print('❌ [API] Gagal fetchVehicles: $e');
+    }
+    return [];
+  }
+
+  // Ambil ritase aktif berdasarkan driver dan kendaraan
+  static Future<Map<String, dynamic>?> fetchActiveRitase(int idDriver, int idKendaraan) async {
+    try {
+      final response = await dio.get('/driver/active-ritase', queryParameters: {
+        'id_driver': idDriver,
+        'id_kendaraan': idKendaraan,
+      });
+      
+      if (response.data != null && response.data['success'] == true) {
+        return response.data['data'];
+      }
+    } catch (e) {
+      print('❌ [API] Gagal fetchActiveRitase: $e');
+    }
+    return null;
+  }
 }

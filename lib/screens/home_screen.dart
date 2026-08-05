@@ -61,33 +61,12 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Master Data Seller (Loaded dynamically from Backend Database)
-  List<SellerDummy> _allSellers = const [
-    SellerDummy(
-      id: 'S01',
-      name: 'SKI',
-      address: 'Jl. Pajajaran XIV No.62, RT.005/RW.005, Gandasari, Kec. Jatiuwung, Kota Tangerang',
-      phone: '-',
-      estimatedAwb: 20,
-      totalKoli: 15,
-    ),
-    SellerDummy(
-      id: 'S02',
-      name: 'TITIP AJA',
-      address: 'RMM9+49Q, RT.002/RW.003, Poris Plawad, Kec. Batuceper, Kota Tangerang',
-      phone: '-',
-      estimatedAwb: 20,
-      totalKoli: 15,
-    ),
-    SellerDummy(
-      id: 'S03',
-      name: 'Gateway Tangerang',
-      address: 'Gateway Sorting Center Hub - Kota Tangerang, Banten 15111',
-      phone: '-',
-      estimatedAwb: 20,
-      totalKoli: 15,
-    ),
-  ];
+  List<SellerDummy> _allSellers = [];
+  bool _isLoadingActiveRitase = false;
+  String? _activeRitaseKode;
+  String? _activeRitaseStatus;
+  List<dynamic> _vehicles = [];
+  String? _selectedVehiclePlat;
 
   // State Perjalanan Multi-Stop
   bool _isTripStarted = false;
@@ -135,7 +114,6 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadConfig();
     _ensureLocationPermission();
-    _fetchSellersFromBackend();
   }
 
   Future<void> _loadConfig() async {
@@ -146,6 +124,69 @@ class _HomeScreenState extends State<HomeScreen> {
       _idKendaraan = cfg['id_kendaraan'] ?? 2;
       _idRitase = cfg['id_ritase'] ?? 0;
     });
+    await _fetchVehicles();
+    await _fetchActiveRitase();
+  }
+
+  Future<void> _fetchVehicles() async {
+    final vehicles = await ApiClient.fetchVehicles();
+    if (!mounted) return;
+    setState(() {
+      _vehicles = vehicles;
+      try {
+        final current = _vehicles.firstWhere((v) => v['id'] == _idKendaraan);
+        _selectedVehiclePlat = current['plat'];
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _fetchActiveRitase() async {
+    if (_idKendaraan == 0) return;
+    setState(() {
+      _isLoadingActiveRitase = true;
+      _allSellers.clear();
+      _isTripStarted = false;
+    });
+
+    final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
+    if (!mounted) return;
+
+    if (data != null && data['has_active_ritase'] == true) {
+      final stops = data['stops'] as List<dynamic>? ?? [];
+      final filteredStops = stops.where((s) => s['jenis_stop'] != 'gudang').toList();
+      final parsedSellers = filteredStops.map((item) {
+        return SellerDummy(
+          id: item['id_stop'].toString(),
+          name: item['nama_lokasi']?.toString() ?? '',
+          address: item['alamat']?.toString() ?? '',
+          phone: item['no_hp']?.toString() ?? '-',
+          estimatedAwb: 20, // Dummy
+          totalKoli: 15,    // Dummy
+        );
+      }).toList();
+
+      setState(() {
+        _idRitase = data['id_ritase'] ?? 0;
+        _activeRitaseKode = data['kode_ritase']?.toString();
+        _activeRitaseStatus = data['status']?.toString();
+        _allSellers = parsedSellers;
+        _isLoadingActiveRitase = false;
+      });
+      
+      // Save to config
+      await ApiClient.saveDriverConfig(
+        idDriver: _idDriver,
+        idKendaraan: _idKendaraan,
+        idRitase: _idRitase,
+      );
+    } else {
+      setState(() {
+        _idRitase = 0;
+        _activeRitaseKode = null;
+        _activeRitaseStatus = null;
+        _isLoadingActiveRitase = false;
+      });
+    }
   }
 
   // Minta izin lokasi + ambil posisi pertama
@@ -199,44 +240,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<void> _fetchSellersFromBackend() async {
-    try {
-      final response = await ApiClient.dio.get('/sellers');
-      if (response.data['success'] == true) {
-        final List list = response.data['data'] as List;
-        if (list.isNotEmpty && mounted) {
-          final fetched = list.map((item) {
-            return SellerDummy(
-              id: item['id'].toString(),
-              name: item['name']?.toString() ?? '',
-              address: item['address']?.toString() ?? '',
-              phone: item['no_hp']?.toString() ?? '-',
-              estimatedAwb: 20,
-              totalKoli: 15,
-            );
-          }).toList();
 
-          // Filter & Urutkan Rute Khusus AWALUDIN: 1. SKI -> 2. TITIP AJA -> 3. Gateway Tangerang
-          final routeOrder = ['SKI', 'TITIP AJA', 'Gateway'];
-          final filtered = fetched.where((s) {
-            return routeOrder.any((name) => s.name.toUpperCase().contains(name.toUpperCase()));
-          }).toList();
-
-          filtered.sort((a, b) {
-            final idxA = routeOrder.indexWhere((name) => a.name.toUpperCase().contains(name.toUpperCase()));
-            final idxB = routeOrder.indexWhere((name) => b.name.toUpperCase().contains(name.toUpperCase()));
-            return idxA.compareTo(idxB);
-          });
-
-          setState(() {
-            _allSellers = filtered.isNotEmpty ? filtered : _allSellers;
-          });
-        }
-      }
-    } catch (_) {
-      // Fallback ke dummy list jika backend offline
-    }
-  }
 
   @override
   void dispose() {
@@ -334,6 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _longitude = 106.6522;
       _gpsTick = 0;
     });
+    _fetchActiveRitase();
   }
 
   List<SellerDummy> get _availableSellers {
@@ -445,71 +450,62 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Pengaturan identitas tracking (id driver/kendaraan/ritase)
-  Future<void> _showSettingsDialog() async {
-    final driverCtl = TextEditingController(text: '$_idDriver');
-    final vehicleCtl = TextEditingController(text: '$_idKendaraan');
-    final ritaseCtl = TextEditingController(text: '$_idRitase');
-
-    await showDialog(
+  Future<void> _showVehicleSelection() async {
+    await showModalBottomSheet(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.settings_outlined, color: Color(0xFF0D47A1), size: 24),
-              SizedBox(width: 8),
-              Text('Pengaturan Tracking', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          content: Column(
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext ctx) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: driverCtl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'ID Driver', border: OutlineInputBorder()),
+              const Text(
+                'Pilih Kendaraan Anda',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: vehicleCtl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'ID Kendaraan', border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ritaseCtl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'ID Ritase (0 = belum ada)',
-                  border: OutlineInputBorder(),
+              const SizedBox(height: 16),
+              if (_vehicles.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Text('Tidak ada kendaraan tersedia.'),
+                )
+              else
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: _vehicles.length,
+                    itemBuilder: (context, index) {
+                      final v = _vehicles[index];
+                      final isSelected = _idKendaraan == v['id'];
+                      return ListTile(
+                        leading: Icon(
+                          Icons.local_shipping,
+                          color: isSelected ? Colors.blue : Colors.grey,
+                        ),
+                        title: Text(v['plat']?.toString() ?? '-'),
+                        subtitle: Text('${v['type']} - ${v['capacity_kg']}kg'),
+                        trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.blue) : null,
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          setState(() {
+                            _idKendaraan = v['id'] as int;
+                            _selectedVehiclePlat = v['plat'];
+                          });
+                          await ApiClient.saveDriverConfig(
+                            idDriver: _idDriver,
+                            idKendaraan: _idKendaraan,
+                            idRitase: 0,
+                          );
+                          await _fetchActiveRitase();
+                        },
+                      );
+                    },
+                  ),
                 ),
-              ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Batal', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                await ApiClient.saveDriverConfig(
-                  idDriver: int.tryParse(driverCtl.text.trim()) ?? 0,
-                  idKendaraan: int.tryParse(vehicleCtl.text.trim()) ?? 0,
-                  idRitase: int.tryParse(ritaseCtl.text.trim()) ?? 0,
-                );
-                await _loadConfig();
-                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0D47A1),
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Simpan', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
         );
       },
     );
@@ -745,9 +741,9 @@ class _HomeScreenState extends State<HomeScreen> {
             : null,
         actions: [
           IconButton(
-            onPressed: _showSettingsDialog,
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Pengaturan Tracking',
+            icon: const Icon(Icons.directions_car),
+            tooltip: 'Pilih Kendaraan',
+            onPressed: _showVehicleSelection,
           ),
           IconButton(
             onPressed: _resetSimulation,
@@ -786,12 +782,34 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // Tombol Mulai Perjalanan langsung di bawah Asal Gudang (saat di Beranda)
             if (!_isTripStarted) ...[
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    if (_allSellers.isNotEmpty) {
+              if (_allSellers.isEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade300),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.amber),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Belum ada penugasan rute untuk kendaraan ini. Silakan pilih kendaraan lain atau tunggu admin.',
+                          style: TextStyle(color: Colors.black87),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      if (_allSellers.isNotEmpty) {
                       _startTripDirectly(_allSellers.first);
                     }
                   },
