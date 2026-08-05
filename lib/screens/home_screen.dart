@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import '../services/api_client.dart';
 
 // Model data dummy Seller
@@ -111,8 +112,16 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<TripStage, int> _currentStageDurations = {};
 
   // Dummy Live GPS Coordinates
-  double _latitude = -6.312845;
-  double _longitude = 107.164532;
+  double _latitude = -6.2024;
+  double _longitude = 106.6522;
+
+  // Identitas tracking (dari konfigurasi, bukan hardcode)
+  int _idDriver = 3;
+  int _idKendaraan = 2;
+  int _idRitase = 0;
+
+  // Counter throttling refresh GPS asli (tiap 10 detik)
+  int _gpsTick = 0;
 
   // Smart tracking state variables
   double? _lastSentLat;
@@ -123,7 +132,67 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _loadConfig();
+    _ensureLocationPermission();
     _fetchSellersFromBackend();
+  }
+
+  Future<void> _loadConfig() async {
+    final cfg = await ApiClient.loadDriverConfig();
+    if (!mounted) return;
+    setState(() {
+      _idDriver = cfg['id_driver'] ?? 3;
+      _idKendaraan = cfg['id_kendaraan'] ?? 2;
+      _idRitase = cfg['id_ritase'] ?? 0;
+    });
+  }
+
+  // Minta izin lokasi + ambil posisi pertama
+  Future<void> _ensureLocationPermission() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
+      return;
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied) {
+      _showSnack('Izin lokasi ditolak. Live tracking tidak berjalan.');
+      return;
+    }
+    if (permission == LocationPermission.deniedForever) {
+      _showSnack('Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
+      return;
+    }
+    await _refreshLocation();
+  }
+
+  // Ambil posisi GPS asli HP
+  Future<void> _refreshLocation() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        _latitude = pos.latitude;
+        _longitude = pos.longitude;
+      });
+    } catch (_) {
+      // Pertahankan koordinat terakhir jika GPS belum siap
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
   }
 
   Future<void> _fetchSellersFromBackend() async {
@@ -181,9 +250,11 @@ class _HomeScreenState extends State<HomeScreen> {
           _activeStageSeconds++;
           _totalTripSeconds++;
 
-          // Simulasi pergerakan GPS kecil secara real-time
-          _latitude += 0.000012;
-          _longitude += 0.000018;
+          // Refresh posisi GPS asli tiap 10 detik
+          _gpsTick++;
+          if (_gpsTick % 10 == 0) {
+            _refreshLocation();
+          }
 
           // Smart GPS Tracking upload logic
           final now = DateTime.now();
@@ -218,6 +289,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     speed: 0,
                     status: '$_currentStageTitle (Hemat Baterai)',
                     koli: _currentActualKoli,
+                    idDriver: _idDriver,
+                    idKendaraan: _idKendaraan,
+                    idRitase: _idRitase,
                   );
                 }
               } else {
@@ -251,8 +325,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentActualKoli = 0;
       _awbInputController.text = '0';
       _koliInputController.text = '0';
-      _latitude = -6.312845;
-      _longitude = 107.164532;
+      _latitude = -6.2024;
+      _longitude = 106.6522;
+      _gpsTick = 0;
     });
   }
 
@@ -290,7 +365,26 @@ class _HomeScreenState extends State<HomeScreen> {
       speed: speed,
       status: _currentStageTitle,
       koli: _currentActualKoli,
+      idDriver: _idDriver,
+      idKendaraan: _idKendaraan,
+      idRitase: _idRitase,
     );
+  }
+
+  // Mapping stage UI -> status backend (ritase_event)
+  String _stageToStatusKey(TripStage stage) {
+    switch (stage) {
+      case TripStage.loadingGoods:
+        return 'mulai_loading';
+      case TripStage.leavingWarehouse:
+        return 'berangkat_gudang';
+      case TripStage.enRoute:
+        return 'menuju_seller';
+      case TripStage.arrived:
+        return 'sampai_gudang';
+      case TripStage.completed:
+        return 'selesai';
+    }
   }
 
   String get _currentStageTitle {
@@ -340,6 +434,76 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             );
           },
+        );
+      },
+    );
+  }
+
+  // Pengaturan identitas tracking (id driver/kendaraan/ritase)
+  Future<void> _showSettingsDialog() async {
+    final driverCtl = TextEditingController(text: '$_idDriver');
+    final vehicleCtl = TextEditingController(text: '$_idKendaraan');
+    final ritaseCtl = TextEditingController(text: '$_idRitase');
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.settings_outlined, color: Color(0xFF0D47A1), size: 24),
+              SizedBox(width: 8),
+              Text('Pengaturan Tracking', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: driverCtl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'ID Driver', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: vehicleCtl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'ID Kendaraan', border: OutlineInputBorder()),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ritaseCtl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'ID Ritase (0 = belum ada)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Batal', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await ApiClient.saveDriverConfig(
+                  idDriver: int.tryParse(driverCtl.text.trim()) ?? 0,
+                  idKendaraan: int.tryParse(vehicleCtl.text.trim()) ?? 0,
+                  idRitase: int.tryParse(ritaseCtl.text.trim()) ?? 0,
+                );
+                await _loadConfig();
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0D47A1),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Simpan', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
         );
       },
     );
@@ -437,6 +601,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentActualKoli = inputKoli;
     }
 
+    // Catat stage yang sedang berakhir (untuk riwayat status backend)
+    final finishedStage = _currentStage;
+    final finishedDuration = _currentStageDurations[finishedStage] ?? _activeStageSeconds;
+
     setState(() {
       _currentStageDurations[_currentStage] = _activeStageSeconds;
       _activeStageSeconds = 0;
@@ -470,6 +638,15 @@ class _HomeScreenState extends State<HomeScreen> {
           break;
       }
     });
+
+    // Simpan riwayat status + durasi ke backend (ritase_event)
+    ApiClient.sendStatusUpdate(
+      idRitase: _idRitase,
+      status: _stageToStatusKey(finishedStage),
+      latitude: _latitude,
+      longitude: _longitude,
+      durasiDetik: finishedDuration,
+    );
 
     _sendInstantTracking();
   }
@@ -561,6 +738,11 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             : null,
         actions: [
+          IconButton(
+            onPressed: _showSettingsDialog,
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Pengaturan Tracking',
+          ),
           IconButton(
             onPressed: _resetSimulation,
             icon: const Icon(Icons.refresh),
