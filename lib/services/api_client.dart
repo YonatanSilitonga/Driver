@@ -4,8 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  static const String _defaultUrl = 'http://127.0.0.1:8080/api/v1';
-  static const String _fallbackUrl = 'http://10.133.253.182:8080/api/v1';
+  static const String _defaultUrl = 'http://127.0.0.1:8081/api/v1';
+  static const String _fallbackUrl = 'http://192.168.20.244:8081/api/v1';
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
@@ -22,7 +22,10 @@ class ApiClient {
         baseUrl: _activeBaseUrl,
         connectTimeout: const Duration(seconds: 8),
         receiveTimeout: const Duration(seconds: 12),
-        headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
       ),
     );
 
@@ -49,10 +52,7 @@ class ApiClient {
                 opts.path,
                 data: opts.data,
                 queryParameters: opts.queryParameters,
-                options: Options(
-                  method: opts.method,
-                  headers: opts.headers,
-                ),
+                options: Options(method: opts.method, headers: opts.headers),
               );
               return handler.resolve(response);
             } catch (_) {}
@@ -113,7 +113,7 @@ class ApiClient {
     return {
       'id_driver': prefs.getInt(_keyIdDriver) ?? 3,
       'id_kendaraan': prefs.getInt(_keyIdKendaraan) ?? 2,
-      'id_ritase': prefs.getInt(_keyIdRitase) ?? 0,
+      'id_ritase': prefs.getInt(_keyIdRitase) ?? 4,
     };
   }
 
@@ -124,16 +124,20 @@ class ApiClient {
     required int speed,
     required String status,
     int koli = 0,
+    int durasiDetik = 0,
     int idDriver = 3,
     int idKendaraan = 2,
     int idRitase = 0,
   }) async {
     try {
-      print('📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli');
+      print(
+        '📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli | Durasi: $durasiDetik dtk',
+      );
       final res = await dio.post(
         '/driver/tracking',
         data: {
-          'id_ritase': idRitase,   // 0 menandakan belum ada ritase (disimpan sebagai NULL di Supabase)
+          'id_ritase':
+              idRitase, // 0 menandakan belum ada ritase (disimpan sebagai NULL di Supabase)
           'id_kendaraan': idKendaraan,
           'id_driver': idDriver,
           'latitude': latitude,
@@ -142,9 +146,12 @@ class ApiClient {
           'arah': 0,
           'status': status,
           'jumlah_koli': koli,
+          'durasi_detik': durasiDetik,
         },
       );
-      print('✅ [GPS TRACKING] Berhasil tersimpan di database Supabase: ${res.data}');
+      print(
+        '✅ [GPS TRACKING] Berhasil tersimpan di database Supabase: ${res.data}',
+      );
     } catch (e) {
       print('❌ [GPS TRACKING] Gagal mengirim: $e');
     }
@@ -159,8 +166,14 @@ class ApiClient {
     int durasiDetik = 0,
   }) async {
     if (idRitase <= 0) {
-      print('⚠️ [STATUS] id_ritase belum diisi, riwayat status dilewati');
-      return;
+      print('⚠️ [STATUS] id_ritase 0, mengirim via tracking endpoint...');
+      return sendTrackingData(
+        latitude: latitude,
+        longitude: longitude,
+        speed: 0,
+        status: status,
+        durasiDetik: durasiDetik,
+      );
     }
     try {
       print('📤 [STATUS] Update $idRitase -> $status ($durasiDetik dtk)');

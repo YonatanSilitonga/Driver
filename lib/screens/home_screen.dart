@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Identitas tracking (dari konfigurasi, bukan hardcode)
   int _idDriver = 3;
   int _idKendaraan = 2;
-  int _idRitase = 0;
+  int _idRitase = 4;
 
   // Counter throttling refresh GPS asli (tiap 10 detik)
   int _gpsTick = 0;
@@ -353,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _sendInstantTracking();
   }
 
-  void _sendInstantTracking({int speed = 0}) {
+  void _sendInstantTracking({int speed = 0, int durasiDetik = 0, TripStage? stage}) {
     final now = DateTime.now();
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
@@ -363,8 +363,9 @@ class _HomeScreenState extends State<HomeScreen> {
       latitude: _latitude,
       longitude: _longitude,
       speed: speed,
-      status: _currentStageTitle,
+      status: _stageToStatusKey(stage ?? _currentStage),
       koli: _currentActualKoli,
+      durasiDetik: durasiDetik,
       idDriver: _idDriver,
       idKendaraan: _idKendaraan,
       idRitase: _idRitase,
@@ -648,7 +649,7 @@ class _HomeScreenState extends State<HomeScreen> {
       durasiDetik: finishedDuration,
     );
 
-    _sendInstantTracking();
+    _sendInstantTracking(durasiDetik: finishedDuration, stage: finishedStage);
   }
 
   void _finishEntireRoute() {
