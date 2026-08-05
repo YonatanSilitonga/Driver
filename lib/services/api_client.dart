@@ -4,7 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  static const String _defaultUrl = 'http://127.0.0.1:8081/api/v1';
+  static const String _defaultUrl =
+      'https://violator-krypton-image.ngrok-free.dev/api/v1';
   static const String _fallbackUrl = 'http://192.168.20.244:8081/api/v1';
   static const String _tokenKey = 'auth_token';
 
@@ -25,6 +26,7 @@ class ApiClient {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true', // Wajib untuk API via Ngrok Free
         },
       ),
     );
@@ -165,20 +167,11 @@ class ApiClient {
     required double longitude,
     int durasiDetik = 0,
   }) async {
-    if (idRitase <= 0) {
-      print('⚠️ [STATUS] id_ritase 0, mengirim via tracking endpoint...');
-      return sendTrackingData(
-        latitude: latitude,
-        longitude: longitude,
-        speed: 0,
-        status: status,
-        durasiDetik: durasiDetik,
-      );
-    }
+    final targetId = idRitase > 0 ? idRitase : 4;
     try {
-      print('📤 [STATUS] Update $idRitase -> $status ($durasiDetik dtk)');
+      print('📤 [STATUS] Update $targetId -> $status ($durasiDetik dtk)');
       final res = await dio.post(
-        '/armada/ritase/$idRitase/status',
+        '/armada/ritase/$targetId/status',
         data: {
           'status': status,
           'latitude': latitude,

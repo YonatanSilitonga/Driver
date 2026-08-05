@@ -114,6 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Dummy Live GPS Coordinates
   double _latitude = -6.2024;
   double _longitude = 106.6522;
+  int _currentSpeedKmH = 0;
 
   // Identitas tracking (dari konfigurasi, bukan hardcode)
   int _idDriver = 3;
@@ -174,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
+          accuracy: LocationAccuracy.high,
           timeLimit: Duration(seconds: 10),
         ),
       );
@@ -182,6 +183,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _latitude = pos.latitude;
         _longitude = pos.longitude;
+        // Konversi m/s ke km/h
+        final speedMs = pos.speed < 0 ? 0.0 : pos.speed;
+        _currentSpeedKmH = (speedMs * 3.6).round();
       });
     } catch (_) {
       // Pertahankan koordinat terakhir jika GPS belum siap
@@ -212,19 +216,20 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }).toList();
 
-          // Urutkan Rute Khusus AWALUDIN: 1. SKI -> 2. TITIP AJA -> 3. Gateway Tangerang
+          // Filter & Urutkan Rute Khusus AWALUDIN: 1. SKI -> 2. TITIP AJA -> 3. Gateway Tangerang
           final routeOrder = ['SKI', 'TITIP AJA', 'Gateway'];
-          fetched.sort((a, b) {
+          final filtered = fetched.where((s) {
+            return routeOrder.any((name) => s.name.toUpperCase().contains(name.toUpperCase()));
+          }).toList();
+
+          filtered.sort((a, b) {
             final idxA = routeOrder.indexWhere((name) => a.name.toUpperCase().contains(name.toUpperCase()));
             final idxB = routeOrder.indexWhere((name) => b.name.toUpperCase().contains(name.toUpperCase()));
-            if (idxA != -1 && idxB != -1) return idxA.compareTo(idxB);
-            if (idxA != -1) return -1;
-            if (idxB != -1) return 1;
-            return 0;
+            return idxA.compareTo(idxB);
           });
 
           setState(() {
-            _allSellers = fetched;
+            _allSellers = filtered.isNotEmpty ? filtered : _allSellers;
           });
         }
       }
@@ -272,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
               
               final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
               if (secondsSinceLastSent >= 60) {
-                _sendInstantTracking(speed: 30);
+                _sendInstantTracking(speed: _currentSpeedKmH);
               }
             } else {
               final secondsSinceLastMove = now.difference(_lastMovementTime!).inSeconds;
@@ -353,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _sendInstantTracking();
   }
 
-  void _sendInstantTracking({int speed = 0, int durasiDetik = 0, TripStage? stage}) {
+  void _sendInstantTracking({int? speed, int durasiDetik = 0, TripStage? stage}) {
     final now = DateTime.now();
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
@@ -362,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ApiClient.sendTrackingData(
       latitude: _latitude,
       longitude: _longitude,
-      speed: speed,
+      speed: speed ?? _currentSpeedKmH,
       status: _stageToStatusKey(stage ?? _currentStage),
       koli: _currentActualKoli,
       durasiDetik: durasiDetik,
@@ -996,24 +1001,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ],
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.green[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.green.shade300),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.check_circle, color: Colors.green, size: 12),
-                    SizedBox(width: 4),
-                    Text(
-                      'Tersedia',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.green),
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1205,7 +1192,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF0D47A1).withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFF0D47A1), width: 1.2),
       ),
       child: Column(
@@ -1215,35 +1202,48 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFF8F00),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   'SELLER TUJUAN #${_completedStops.length + 1}',
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            seller.name,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              const Icon(Icons.location_on_outlined, size: 14, color: Colors.grey),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  seller.address,
-                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+          const SizedBox(height: 12),
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              children: [
+                const TextSpan(
+                  text: 'Nama Seller : ',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
                 ),
-              ),
-            ],
+                TextSpan(
+                  text: seller.name,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          RichText(
+            text: TextSpan(
+              style: TextStyle(fontSize: 13, color: Colors.grey[800], height: 1.3),
+              children: [
+                const TextSpan(
+                  text: 'Alamat : ',
+                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
+                TextSpan(
+                  text: seller.address,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1662,7 +1662,95 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 14),
+          // Tombol Tambah Cepat (+10, +100, +1000) & Reset
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildQuickAddChip(controller: controller, amount: 10, label: '+10'),
+                const SizedBox(width: 8),
+                _buildQuickAddChip(controller: controller, amount: 100, label: '+100'),
+                const SizedBox(width: 8),
+                _buildQuickAddChip(controller: controller, amount: 1000, label: '+1000'),
+                const SizedBox(width: 8),
+                _buildResetChip(controller: controller),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildQuickAddChip({
+    required TextEditingController controller,
+    required int amount,
+    required String label,
+  }) {
+    return Material(
+      color: const Color(0xFFFF8F00).withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          int val = int.tryParse(controller.text.trim()) ?? 0;
+          setState(() {
+            controller.text = (val + amount).toString();
+          });
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFFF8F00).withValues(alpha: 0.5)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFFD84315),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResetChip({required TextEditingController controller}) {
+    return Material(
+      color: Colors.grey[100],
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            controller.text = '0';
+          });
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade400),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.refresh, size: 14, color: Colors.grey[700]),
+              const SizedBox(width: 4),
+              Text(
+                'Reset',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[800],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

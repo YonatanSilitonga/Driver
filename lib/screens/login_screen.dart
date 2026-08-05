@@ -86,7 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: const Icon(
-                        Icons.hub_outlined,
+                        Icons.local_shipping_rounded,
                         color: Colors.white,
                         size: 40,
                       ),
