@@ -29,6 +29,7 @@ class CompletedStop {
   final SellerDummy seller;
   final int actualAwb;
   final int actualKoli;
+  final int actualEcer;
   final int totalDurationSeconds;
   final Map<TripStage, int> stageDurations;
 
@@ -36,6 +37,7 @@ class CompletedStop {
     required this.seller,
     required this.actualAwb,
     required this.actualKoli,
+    required this.actualEcer,
     required this.totalDurationSeconds,
     required this.stageDurations,
   });
@@ -81,9 +83,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // Controllers & State untuk Input AWB & Koli saat Bongkar Muat (Dimulai dari 0)
   final TextEditingController _awbInputController = TextEditingController(text: '0');
   final TextEditingController _koliInputController = TextEditingController(text: '0');
+  final TextEditingController _ecerInputController = TextEditingController(text: '0');
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
+  int _currentActualEcer = 0;
 
   // Timer & Real-time Location Tracking State
   Timer? _stopwatchTimer;
@@ -251,6 +255,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _stopwatchTimer?.cancel();
     _awbInputController.dispose();
     _koliInputController.dispose();
+    _ecerInputController.dispose();
     super.dispose();
   }
 
@@ -302,6 +307,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     speed: 0,
                     status: '$_currentStageTitle (Hemat Baterai)',
                     koli: _currentActualKoli,
+                    ecer: _currentActualEcer,
                     idDriver: _idDriver,
                     idKendaraan: _idKendaraan,
                     idRitase: _idRitase,
@@ -336,8 +342,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _completedStops.clear();
       _currentActualAwb = 0;
       _currentActualKoli = 0;
+      _currentActualEcer = 0;
       _awbInputController.text = '0';
       _koliInputController.text = '0';
+      _ecerInputController.text = '0';
       _latitude = -6.2024;
       _longitude = 106.6522;
       _gpsTick = 0;
@@ -360,8 +368,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _currentActualAwb = 0;
       _currentActualKoli = 0;
+      _currentActualEcer = 0;
       _awbInputController.text = '0';
       _koliInputController.text = '0';
+      _ecerInputController.text = '0';
     });
     _startTimer();
     _sendInstantTracking();
@@ -379,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
       speed: speed ?? _currentSpeedKmH,
       status: _stageToStatusKey(stage ?? _currentStage),
       koli: _currentActualKoli,
+      ecer: _currentActualEcer,
       durasiDetik: durasiDetik,
       idDriver: _idDriver,
       idKendaraan: _idKendaraan,
@@ -558,39 +569,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _confirmAndNextStage() {
-    // Intercept untuk perjalanan bebas: jika sedang menuju lokasi tapi belum ada seller
-    if (_currentStage == TripStage.enRoute && _currentSeller == null) {
-      _showAddStopModal();
-      return;
-    }
-
-    if (_currentStage == TripStage.loadingGoods) {
-      final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
-
-      if (inputKoli <= 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              children: [
-                Icon(Icons.warning_amber_rounded, color: Colors.white),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Silahkan isi jumlah koli yang anda bawa!',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: Colors.red[700],
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
-        return;
-      }
-    }
+    // Validasi inputKoli <= 0 dihapus agar input menjadi opsional
 
     showDialog(
       context: context,
@@ -652,7 +631,9 @@ class _HomeScreenState extends State<HomeScreen> {
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
+      final inputEcer = int.tryParse(_ecerInputController.text.trim()) ?? _currentActualEcer;
       _currentActualKoli = inputKoli;
+      _currentActualEcer = inputEcer;
     }
 
     // Catat stage yang sedang berakhir (untuk riwayat status backend)
@@ -682,6 +663,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 seller: _currentSeller!,
                 actualAwb: _currentActualAwb,
                 actualKoli: _currentActualKoli,
+                actualEcer: _currentActualEcer,
                 totalDurationSeconds: stopTotalDuration,
                 stageDurations: Map.from(_currentStageDurations),
               ),
@@ -699,6 +681,8 @@ class _HomeScreenState extends State<HomeScreen> {
       status: _stageToStatusKey(finishedStage),
       latitude: _latitude,
       longitude: _longitude,
+      koli: _currentActualKoli,
+      ecer: _currentActualEcer,
       durasiDetik: finishedDuration,
     );
 
@@ -750,16 +734,33 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showAddStopModal() async {
-    final sellers = await ApiClient.fetchSellers();
-    if (sellers.isEmpty) {
+    final rawSellers = await ApiClient.fetchSellers();
+    if (rawSellers.isEmpty) {
       _showSnack('Tidak ada data seller tersedia');
       return;
     }
-    
-    int? selectedSellerId;
-    if (sellers.isNotEmpty) {
-      selectedSellerId = sellers.first['id_seller'];
+
+    final Map<int, Map<String, dynamic>> uniqueSellers = {};
+    for (var s in rawSellers) {
+      if (s is Map) {
+        final id = int.tryParse(s['id_seller']?.toString() ?? '');
+        final name = (s['nama_seller'] ?? s['name'] ?? s['nama'] ?? 'Seller #$id').toString();
+        if (id != null) {
+          uniqueSellers[id] = {
+            'id_seller': id,
+            'nama_seller': name,
+          };
+        }
+      }
     }
+
+    final sellers = uniqueSellers.values.toList();
+    if (sellers.isEmpty) {
+      _showSnack('Tidak ada data seller valid');
+      return;
+    }
+
+    int? selectedSellerId = sellers.first['id_seller'] as int?;
 
     if (!mounted) return;
 
@@ -777,57 +778,56 @@ class _HomeScreenState extends State<HomeScreen> {
                 bottom: MediaQuery.of(context).viewInsets.bottom,
                 left: 20, right: 20, top: 20,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text('Tambah Lokasi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<int>(
-                    decoration: const InputDecoration(
-                      labelText: 'Pilih Seller',
-                      border: OutlineInputBorder(),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Tambah Lokasi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<int>(
+                      decoration: const InputDecoration(
+                        labelText: 'Pilih Seller',
+                        border: OutlineInputBorder(),
+                      ),
+                      value: selectedSellerId,
+                      items: sellers.map<DropdownMenuItem<int>>((s) {
+                        return DropdownMenuItem<int>(
+                          value: s['id_seller'] as int,
+                          child: Text(s['nama_seller'].toString()),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        setSheetState(() {
+                          selectedSellerId = val;
+                        });
+                      },
                     ),
-                    value: selectedSellerId,
-                    items: sellers.map<DropdownMenuItem<int>>((s) {
-                      return DropdownMenuItem<int>(
-                        value: s['id_seller'],
-                        child: Text(s['nama_seller'] ?? '-'),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      setSheetState(() {
-                        selectedSellerId = val;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 50),
-                    ),
-                    onPressed: () async {
-                      if (selectedSellerId == null) return;
-                      Navigator.pop(ctx);
-                      final res = await ApiClient.addStop(_idRitase, selectedSellerId!);
-                      if (res != null) {
-                        await _fetchActiveRitase();
-                        if (_currentStage == TripStage.enRoute && _currentSeller == null) {
-                           setState(() {
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 50),
+                      ),
+                      onPressed: () async {
+                        if (selectedSellerId == null) return;
+                        Navigator.pop(ctx);
+                        final res = await ApiClient.addStop(_idRitase, selectedSellerId!);
+                        if (res != null) {
+                          await _fetchActiveRitase();
+                          setState(() {
                              if (_allSellers.isNotEmpty) {
                                _currentSeller = _allSellers.last;
                              }
-                           });
-                           _nextStage();
+                          });
+                          _showSnack('Berhasil menambahkan lokasi!');
+                        } else {
+                          _showSnack('Gagal menambahkan lokasi');
                         }
-                        _showSnack('Berhasil menambahkan lokasi!');
-                      } else {
-                        _showSnack('Gagal menambahkan lokasi');
-                      }
-                    },
-                    child: const Text('Tambah ke Rute'),
-                  ),
-                  const SizedBox(height: 20),
-                ],
+                      },
+                      child: const Text('Tambah ke Rute'),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             );
           },
@@ -1402,7 +1402,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
                         ),
                         Text(
-                          '${stop.actualAwb} AWB, ${stop.actualKoli} Koli • Durasi: ${_formatReadableDuration(stop.totalDurationSeconds)}',
+                          '${stop.actualAwb} AWB, ${stop.actualKoli} Koli, ${stop.actualEcer} Ecer • Durasi: ${_formatReadableDuration(stop.totalDurationSeconds)}',
                           style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                         ),
                       ],
@@ -1421,7 +1421,40 @@ class _HomeScreenState extends State<HomeScreen> {
   // Card Informasi Seller yang Sedang Dituju
   Widget _buildActiveTripSellerCard() {
     final seller = _currentSeller;
-    if (seller == null) return const SizedBox.shrink();
+    if (seller == null) {
+      return Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.grey.shade300, width: 1.2),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.location_off_outlined, color: Colors.grey),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Lokasi Seller (Belum Dipilih)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: _showAddStopModal,
+              icon: const Icon(Icons.add_location_alt, size: 16),
+              label: const Text('Pilih Seller', style: TextStyle(fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Container(
       width: double.infinity,
@@ -1699,7 +1732,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Penjemputan di ${_currentSeller?.name} Selesai! ($_currentActualAwb AWB, $_currentActualKoli Koli)',
+                      'Penjemputan di ${_currentSeller?.name} Selesai! ($_currentActualAwb AWB, $_currentActualKoli Koli, $_currentActualEcer Ecer)',
                       style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
                     ),
                   ),
@@ -1748,8 +1781,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       _currentStageDurations.clear();
                       _currentActualAwb = 0;
                       _currentActualKoli = 0;
+                      _currentActualEcer = 0;
                       _awbInputController.text = '0';
                       _koliInputController.text = '0';
+                      _ecerInputController.text = '0';
                     });
                     _startTimer();
                     _sendInstantTracking();
@@ -1830,6 +1865,13 @@ class _HomeScreenState extends State<HomeScreen> {
             controller: _koliInputController,
             icon: Icons.inventory_2,
             color: const Color(0xFFFF8F00),
+          ),
+          const SizedBox(height: 12),
+          _buildVerticalStepperControl(
+            label: 'Jumlah Ecer (Pcs)',
+            controller: _ecerInputController,
+            icon: Icons.widgets_outlined,
+            color: const Color(0xFF1E88E5),
           ),
         ],
       ),
