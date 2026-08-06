@@ -49,13 +49,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (kid != null && kid > 0) idKendaraan = kid;
                 }
               } catch (_) {/* fallback ke config */}
+              final driverName = (user['nama'] ?? user['name'] ?? user['username'] ?? 'AWALUDIN').toString();
               await ApiClient.saveDriverConfig(
                 idDriver: idDriver,
                 idKendaraan: idKendaraan,
                 idRitase: 0,
+                driverName: driverName,
               );
               // ignore: avoid_print
-              print('✅ Tracking identity -> id_driver=$idDriver, id_kendaraan=$idKendaraan');
+              print('✅ Tracking identity -> id_driver=$idDriver, id_kendaraan=$idKendaraan, name=$driverName');
             } catch (e) {
               // ignore: avoid_print
               print('⚠️ Gagal set config tracking: $e');

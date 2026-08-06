@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_client.dart';
+import '../services/auth_service.dart';
+import 'login_screen.dart';
 
 // Model data dummy Seller
 class SellerDummy {
@@ -99,6 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _idDriver = 3;
   int _idKendaraan = 2;
   int _idRitase = 4;
+  String _driverName = 'AWALUDIN';
 
   // Counter throttling refresh GPS asli (tiap 10 detik)
   int _gpsTick = 0;
@@ -123,6 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _idDriver = cfg['id_driver'] ?? 3;
       _idKendaraan = cfg['id_kendaraan'] ?? 2;
       _idRitase = cfg['id_ritase'] ?? 0;
+      _driverName = cfg['driver_name']?.toString() ?? 'AWALUDIN';
     });
     await _fetchVehicles();
     await _fetchActiveRitase();
@@ -511,7 +515,55 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _confirmLogout() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.logout_rounded, color: Colors.redAccent),
+              SizedBox(width: 8),
+              Text('Konfirmasi Logout', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text('Apakah Anda yakin ingin keluar dari akun ini?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, false),
+              child: const Text('Batal', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogCtx, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Keluar', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm == true && mounted) {
+      await AuthService.logout();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   void _confirmAndNextStage() {
+    // Intercept untuk perjalanan bebas: jika sedang menuju lokasi tapi belum ada seller
+    if (_currentStage == TripStage.enRoute && _currentSeller == null) {
+      _showAddStopModal();
+      return;
+    }
+
     if (_currentStage == TripStage.loadingGoods) {
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
 
@@ -676,6 +728,114 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$minutes mnt $remainingSeconds dtk';
   }
 
+  
+  Future<void> _startFreeTrip() async {
+    setState(() {
+      _isLoadingActiveRitase = true;
+    });
+    final res = await ApiClient.startFreeTrip(_idDriver, _idKendaraan);
+    if (res != null) {
+      await _fetchActiveRitase();
+      setState(() {
+        _isTripStarted = true;
+      });
+      _startTimer();
+      _sendInstantTracking();
+    } else {
+      setState(() {
+        _isLoadingActiveRitase = false;
+      });
+      _showSnack('Gagal memulai perjalanan bebas');
+    }
+  }
+
+  Future<void> _showAddStopModal() async {
+    final sellers = await ApiClient.fetchSellers();
+    if (sellers.isEmpty) {
+      _showSnack('Tidak ada data seller tersedia');
+      return;
+    }
+    
+    int? selectedSellerId;
+    if (sellers.isNotEmpty) {
+      selectedSellerId = sellers.first['id_seller'];
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+                left: 20, right: 20, top: 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Tambah Lokasi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<int>(
+                    decoration: const InputDecoration(
+                      labelText: 'Pilih Seller',
+                      border: OutlineInputBorder(),
+                    ),
+                    value: selectedSellerId,
+                    items: sellers.map<DropdownMenuItem<int>>((s) {
+                      return DropdownMenuItem<int>(
+                        value: s['id_seller'],
+                        child: Text(s['nama_seller'] ?? '-'),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      setSheetState(() {
+                        selectedSellerId = val;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 50),
+                    ),
+                    onPressed: () async {
+                      if (selectedSellerId == null) return;
+                      Navigator.pop(ctx);
+                      final res = await ApiClient.addStop(_idRitase, selectedSellerId!);
+                      if (res != null) {
+                        await _fetchActiveRitase();
+                        if (_currentStage == TripStage.enRoute && _currentSeller == null) {
+                           setState(() {
+                             if (_allSellers.isNotEmpty) {
+                               _currentSeller = _allSellers.last;
+                             }
+                           });
+                           _nextStage();
+                        }
+                        _showSnack('Berhasil menambahkan lokasi!');
+                      } else {
+                        _showSnack('Gagal menambahkan lokasi');
+                      }
+                    },
+                    child: const Text('Tambah ke Rute'),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _handleBackToHome() {
     showDialog(
       context: context,
@@ -750,6 +910,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.refresh),
             tooltip: 'Reset Simulasi',
           ),
+          IconButton(
+            icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+            tooltip: 'Logout',
+            onPressed: _confirmLogout,
+          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -759,9 +924,9 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             // Sederhana: Hai, AWALUDIN! (Tampil saat di Beranda)
             if (!_isTripStarted) ...[
-              const Text(
-                'Hai, AWALUDIN!',
-                style: TextStyle(
+              Text(
+                'Hai, $_driverName!',
+                style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                   color: Colors.black87,
@@ -783,25 +948,48 @@ class _HomeScreenState extends State<HomeScreen> {
             // Tombol Mulai Perjalanan langsung di bawah Asal Gudang (saat di Beranda)
             if (!_isTripStarted) ...[
               if (_allSellers.isEmpty)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.amber.shade300),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.amber),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Belum ada penugasan rute untuk kendaraan ini. Silakan pilih kendaraan lain atau tunggu admin.',
-                          style: TextStyle(color: Colors.black87),
+                Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.amber),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Belum ada penugasan rute untuk kendaraan ini. Anda dapat memulai perjalanan bebas.',
+                              style: TextStyle(color: Colors.black87),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        onPressed: _startFreeTrip,
+                        icon: const Icon(Icons.explore, size: 26),
+                        label: const Text(
+                          'Mulai Perjalanan Bebas',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueAccent,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 3,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 )
               else
                 SizedBox(
@@ -986,87 +1174,117 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Kotak Informasi Kendaraan yang dikendarai (Plat: B 9806 UXV)
+  // Kotak Informasi Kendaraan yang dikendarai (Dapat diklik untuk memilih kendaraan)
   Widget _buildVehicleCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF0D47A1).withValues(alpha: 0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.local_shipping_outlined, color: Color(0xFF0D47A1), size: 20),
-                  SizedBox(width: 8),
-                  Text(
-                    'Kendaraan Operasional',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF1F5F9),
-              borderRadius: BorderRadius.circular(10),
+    Map<String, dynamic>? currentVehicle;
+    try {
+      currentVehicle = _vehicles.firstWhere((v) => v['id'] == _idKendaraan) as Map<String, dynamic>?;
+    } catch (_) {}
+
+    final plat = currentVehicle?['plat']?.toString() ?? _selectedVehiclePlat ?? 'B 9806 UXV';
+    final type = currentVehicle?['type']?.toString() ?? 'CDDL';
+    final capacity = currentVehicle?['capacity_kg'] != null ? '${currentVehicle!['capacity_kg']} kg' : '7.000 kg (7 Ton)';
+
+    return InkWell(
+      onTap: _showVehicleSelection,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF0D47A1).withValues(alpha: 0.2)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
             ),
-            child: Row(
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                const Row(
+                  children: [
+                    Icon(Icons.local_shipping_outlined, color: Color(0xFF0D47A1), size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Kendaraan Operasional',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                    ),
+                  ],
+                ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.black,
+                    color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Text(
-                    'B 9806 UXV',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.yellow,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: const Row(
                     children: [
                       Text(
-                        'Jenis: CDDL',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                        'Ganti',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
                       ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Kapasitas: 7.000 kg (7 Ton)',
-                        style: TextStyle(fontSize: 11, color: Colors.grey),
-                      ),
+                      SizedBox(width: 2),
+                      Icon(Icons.chevron_right, size: 14, color: Color(0xFF0D47A1)),
                     ],
                   ),
                 ),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      plat,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.yellow,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Jenis: $type',
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Kapasitas: $capacity',
+                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1491,6 +1709,9 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 14),
 
             // Tombol Opsi Multi-Seller
+
+
+
             if (hasMoreSellers) ...[
               SizedBox(
                 width: double.infinity,
@@ -1504,6 +1725,38 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.add_location_alt_outlined),
                   label: const Text(
                     'Lanjut ke Seller Berikutnya',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0D47A1),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ] else ...[
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _currentSeller = null;
+                      _currentStage = TripStage.enRoute;
+                      _activeStageSeconds = 0;
+                      _currentStageDurations.clear();
+                      _currentActualAwb = 0;
+                      _currentActualKoli = 0;
+                      _awbInputController.text = '0';
+                      _koliInputController.text = '0';
+                    });
+                    _startTimer();
+                    _sendInstantTracking();
+                  },
+                  icon: const Icon(Icons.explore_outlined),
+                  label: const Text(
+                    'Lanjut Cari Lokasi Baru (Bebas)',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                   style: ElevatedButton.styleFrom(

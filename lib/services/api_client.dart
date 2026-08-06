@@ -96,26 +96,32 @@ class ApiClient {
   static const String _keyIdDriver = 'config_id_driver';
   static const String _keyIdKendaraan = 'config_id_kendaraan';
   static const String _keyIdRitase = 'config_id_ritase';
+  static const String _keyDriverName = 'config_driver_name';
 
   // Simpan konfigurasi identitas tracking (dipakai di halaman pengaturan)
   static Future<void> saveDriverConfig({
     required int idDriver,
     required int idKendaraan,
     required int idRitase,
+    String? driverName,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyIdDriver, idDriver);
     await prefs.setInt(_keyIdKendaraan, idKendaraan);
     await prefs.setInt(_keyIdRitase, idRitase);
+    if (driverName != null && driverName.isNotEmpty) {
+      await prefs.setString(_keyDriverName, driverName);
+    }
   }
 
   // Ambil konfigurasi identitas tracking (default: akun uji AWALUDIN)
-  static Future<Map<String, int>> loadDriverConfig() async {
+  static Future<Map<String, dynamic>> loadDriverConfig() async {
     final prefs = await SharedPreferences.getInstance();
     return {
       'id_driver': prefs.getInt(_keyIdDriver) ?? 3,
       'id_kendaraan': prefs.getInt(_keyIdKendaraan) ?? 2,
       'id_ritase': prefs.getInt(_keyIdRitase) ?? 4,
+      'driver_name': prefs.getString(_keyDriverName) ?? 'AWALUDIN',
     };
   }
 
@@ -213,6 +219,53 @@ class ApiClient {
       }
     } catch (e) {
       print('❌ [API] Gagal fetchActiveRitase: $e');
+    }
+    return null;
+  }
+
+  // Ambil daftar seller dari backend
+  static Future<List<dynamic>> fetchSellers() async {
+    try {
+      final response = await dio.get('/sellers');
+      if (response.data != null && response.data['success'] == true) {
+        return response.data['data'] ?? [];
+      } else if (response.data is List) {
+        return response.data;
+      }
+    } catch (e) {
+      print('❌ [API] Gagal fetchSellers: $e');
+    }
+    return [];
+  }
+
+  // Mulai perjalanan bebas
+  static Future<Map<String, dynamic>?> startFreeTrip(int idDriver, int idKendaraan) async {
+    try {
+      final response = await dio.post('/driver/start-free-trip', data: {
+        'id_driver': idDriver,
+        'id_kendaraan': idKendaraan,
+      });
+      if (response.data != null && response.data['success'] == true) {
+        return response.data['data'];
+      }
+    } catch (e) {
+      print('❌ [API] Gagal startFreeTrip: $e');
+    }
+    return null;
+  }
+
+  // Tambahkan stop/lokasi baru ke perjalanan aktif
+  static Future<Map<String, dynamic>?> addStop(int idRitase, int idSeller) async {
+    try {
+      final response = await dio.post('/driver/add-stop', data: {
+        'id_ritase': idRitase,
+        'id_seller': idSeller,
+      });
+      if (response.data != null && response.data['success'] == true) {
+        return response.data['data'];
+      }
+    } catch (e) {
+      print('❌ [API] Gagal addStop: $e');
     }
     return null;
   }
