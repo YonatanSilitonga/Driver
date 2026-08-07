@@ -37,16 +37,19 @@ class _LoginScreenState extends State<LoginScreen> {
             // Set identitas tracking dari akun yang login (bukan hardcode AWALUDIN)
             try {
               final cfg = await ApiClient.loadDriverConfig();
-              final idDriver = ((user['id_driver'] as num?)?.toInt() ?? cfg['id_driver'] ?? 0);
+              final idDriver = _toInt(user['id_driver'], fallback: cfg['id_driver'] ?? 0);
               var idKendaraan = cfg['id_kendaraan'] ?? 2;
               // Coba ambil kendaraan dari ritase driver yang login (scoped oleh backend)
               try {
                 final res = await ApiClient.dio.get('/armada/ritase');
-                final list = res.data?['data'] as List? ?? [];
-                if (list.isNotEmpty) {
-                  final first = list.first as Map? ?? {};
-                  final kid = (first['id_kendaraan'] as num?)?.toInt();
-                  if (kid != null && kid > 0) idKendaraan = kid;
+                final body = res.data;
+                final data = (body is Map && body['data'] is List)
+                    ? body['data'] as List
+                    : const <dynamic>[];
+                if (data.isNotEmpty && data.first is Map) {
+                  final first = data.first as Map;
+                  final kid = _toInt(first['id_kendaraan']);
+                  if (kid > 0) idKendaraan = kid;
                 }
               } catch (_) {/* fallback ke config */}
               final driverName = (user['nama'] ?? user['name'] ?? user['username'] ?? 'AWALUDIN').toString();
@@ -235,4 +238,12 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+/// Konversi aman ke int — tahan null, tipe salah, dan String.
+int _toInt(dynamic v, {dynamic fallback = 0}) {
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? (fallback is num ? fallback.toInt() : 0);
+  if (v == null && fallback is num) return fallback.toInt();
+  return 0;
 }

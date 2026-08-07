@@ -107,7 +107,14 @@ class _HomeScreenState extends State<HomeScreen> {
   int _idRitase = 4;
   String _driverName = 'AWALUDIN';
 
-  // Counter throttling refresh GPS asli (tiap 10 detik)
+  // ── Konstanta Smart GPS Tracking ──
+  static const int _gpsRefreshEveryTicks = 8; // baca GPS tiap 8 detik
+  static const int _movingSendSeconds = 8; // kirim tiap 8 detik saat bergerak
+  static const int _stationarySendSeconds = 180; // kirim tiap 3 menit saat berhenti
+  static const double _speedThresholdKmh = 5; // > 5 km/jam dianggap bergerak
+  static const double _moveThresholdDeg = 0.00005; // geser > ~5 m dianggap bergerak
+
+  // Counter throttling refresh GPS asli
   int _gpsTick = 0;
 
   // Smart tracking state variables
@@ -115,6 +122,10 @@ class _HomeScreenState extends State<HomeScreen> {
   double? _lastSentLng;
   DateTime? _lastMovementTime;
   DateTime? _lastSentTime;
+  // Titik GPS sebelumnya (untuk fallback hitung kecepatan Haversine)
+  DateTime? _prevFixTime;
+  double? _prevLat;
+  double? _prevLng;
 
   @override
   void initState() {
@@ -142,8 +153,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _vehicles = vehicles;
       try {
-        final current = _vehicles.firstWhere((v) => v['id'] == _idKendaraan);
-        _selectedVehiclePlat = current['plat'];
+        final current = _vehicles.firstWhere(
+          (v) => v is Map && v['id'] == _idKendaraan,
+        );
+        _selectedVehiclePlat = current is Map ? current['plat']?.toString() : null;
       } catch (_) {}
     });
   }
@@ -160,14 +173,20 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     if (data != null && data['has_active_ritase'] == true) {
-      final stops = data['stops'] as List<dynamic>? ?? [];
-      final filteredStops = stops.where((s) => s['jenis_stop'] != 'gudang').toList();
+      final rawStops = data['stops'];
+      final stops = rawStops is List ? rawStops : const <dynamic>[];
+      final filteredStops = stops.where((s) {
+        // Guard: s harus Map agar pengaksesan indeks String aman
+        if (s is! Map) return false;
+        return s['jenis_stop'] != 'gudang';
+      });
       final parsedSellers = filteredStops.map((item) {
+        final m = item as Map;
         return SellerDummy(
-          id: item['id_stop'].toString(),
-          name: item['nama_lokasi']?.toString() ?? '',
-          address: item['alamat']?.toString() ?? '',
-          phone: item['no_hp']?.toString() ?? '-',
+          id: (m['id_stop'] ?? '').toString(),
+          name: m['nama_lokasi']?.toString() ?? '',
+          address: m['alamat']?.toString() ?? '',
+          phone: m['no_hp']?.toString() ?? '-',
           estimatedAwb: 20, // Dummy
           totalKoli: 15,    // Dummy
         );
@@ -229,13 +248,36 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
       if (!mounted) return;
+
+      final now = DateTime.now();
+
+      // Kecepatan utama: dari sensor GPS (m/s -> km/jam)
+      final speedMs = pos.speed < 0 ? 0.0 : pos.speed;
+      var speedKmh = (speedMs * 3.6).round();
+
+      // Fallback Haversine: kalau sensor tidak memberi kecepatan,
+      // hitung jarak antara 2 titik GPS terakhir / selisih waktu.
+      if (speedKmh == 0 &&
+          _prevLat != null && _prevLng != null && _prevFixTime != null) {
+        final dist = Geolocator.distanceBetween(
+          _prevLat!, _prevLng!, pos.latitude, pos.longitude,
+        );
+        final dt = now.difference(_prevFixTime!).inSeconds;
+        if (dt > 0) {
+          speedKmh = ((dist / dt) * 3.6).round();
+        }
+      }
+
       setState(() {
         _latitude = pos.latitude;
         _longitude = pos.longitude;
-        // Konversi m/s ke km/h
-        final speedMs = pos.speed < 0 ? 0.0 : pos.speed;
-        _currentSpeedKmH = (speedMs * 3.6).round();
+        _currentSpeedKmH = speedKmh;
       });
+
+      // Simpan titik ini sebagai referensi untuk hitungan berikutnya
+      _prevLat = pos.latitude;
+      _prevLng = pos.longitude;
+      _prevFixTime = now;
     } catch (_) {
       // Pertahankan koordinat terakhir jika GPS belum siap
     }
@@ -268,55 +310,46 @@ class _HomeScreenState extends State<HomeScreen> {
           _activeStageSeconds++;
           _totalTripSeconds++;
 
-          // Refresh posisi GPS asli tiap 10 detik
+          // Refresh posisi GPS asli tiap 8 detik
           _gpsTick++;
-          if (_gpsTick % 10 == 0) {
+          if (_gpsTick % _gpsRefreshEveryTicks == 0) {
             _refreshLocation();
           }
 
           // Smart GPS Tracking upload logic
+          // Berjalan -> kirim tiap 8 detik | Berhenti -> kirim tiap 3 menit
           final now = DateTime.now();
           if (_lastSentTime == null || _lastSentLat == null || _lastSentLng == null) {
             _sendInstantTracking();
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
             final lngDiff = (_longitude - _lastSentLng!).abs();
-            
-            final bool isMoving = (latDiff > 0.00005 || lngDiff > 0.00005) &&
-                (_currentStage == TripStage.leavingWarehouse || _currentStage == TripStage.enRoute);
+            final moved = _currentSpeedKmH > _speedThresholdKmh ||
+                (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
 
-            if (isMoving) {
+            if (moved) {
               _lastMovementTime = now;
-              
               final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
-              if (secondsSinceLastSent >= 60) {
+              if (secondsSinceLastSent >= _movingSendSeconds) {
                 _sendInstantTracking(speed: _currentSpeedKmH);
               }
             } else {
-              final secondsSinceLastMove = now.difference(_lastMovementTime!).inSeconds;
+              // Berhenti: kirim heartbeat tiap 3 menit (hemat baterai)
               final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
-
-              if (secondsSinceLastMove >= 300) {
-                if (secondsSinceLastSent >= 300) {
-                  _lastSentLat = _latitude;
-                  _lastSentLng = _longitude;
-                  _lastSentTime = now;
-                  ApiClient.sendTrackingData(
-                    latitude: _latitude,
-                    longitude: _longitude,
-                    speed: 0,
-                    status: '$_currentStageTitle (Hemat Baterai)',
-                    koli: _currentActualKoli,
-                    ecer: _currentActualEcer,
-                    idDriver: _idDriver,
-                    idKendaraan: _idKendaraan,
-                    idRitase: _idRitase,
-                  );
-                }
-              } else {
-                if (secondsSinceLastSent >= 60) {
-                  _sendInstantTracking();
-                }
+              if (secondsSinceLastSent >= _stationarySendSeconds) {
+                _lastSentLat = _latitude;
+                _lastSentLng = _longitude;
+                _lastSentTime = now;
+                ApiClient.sendTrackingData(
+                  latitude: _latitude,
+                  longitude: _longitude,
+                  speed: 0,
+                  status: '$_currentStageTitle (Hemat Baterai)',
+                  koli: _currentActualKoli,
+                  idDriver: _idDriver,
+                  idKendaraan: _idKendaraan,
+                  idRitase: _idRitase,
+                );
               }
             }
           }
@@ -493,6 +526,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: _vehicles.length,
                     itemBuilder: (context, index) {
                       final v = _vehicles[index];
+                      // Guard: elemen harus Map agar aman diindeks String
+                      if (v is! Map) {
+                        return const ListTile(title: Text('-'));
+                      }
                       final isSelected = _idKendaraan == v['id'];
                       return ListTile(
                         leading: Icon(
@@ -505,8 +542,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         onTap: () async {
                           Navigator.pop(ctx);
                           setState(() {
-                            _idKendaraan = v['id'] as int;
-                            _selectedVehiclePlat = v['plat'];
+                            _idKendaraan = _toInt(v['id']);
+                            _selectedVehiclePlat = v['plat']?.toString();
                           });
                           await ApiClient.saveDriverConfig(
                             idDriver: _idDriver,
@@ -1043,12 +1080,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final isActive = _isTripStarted && !_isEntireRouteCompleted;
     final now = DateTime.now();
     final secondsSinceLastMove = _lastMovementTime != null ? now.difference(_lastMovementTime!).inSeconds : 0;
-    final isBatterySaver = isActive && secondsSinceLastMove >= 300 && 
+    final isBatterySaver = isActive && secondsSinceLastMove >= _stationarySendSeconds && 
         (_currentStage == TripStage.loadingGoods || _currentStage == TripStage.arrived);
 
     final String modeLabel = !isActive
         ? 'Standby'
-        : (isBatterySaver ? 'Hemat Baterai (5 mnt)' : 'Real-time (1 mnt)');
+        : (isBatterySaver ? 'Hemat Baterai (3 mnt)' : 'Real-time (8 dtk)');
 
     final Color statusColor = !isActive
         ? Colors.grey
@@ -1118,8 +1155,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text(
                       isActive
                           ? (isBatterySaver
-                              ? 'Armada diam > 5 mnt. Interval pengiriman 5 mnt (hemat baterai)'
-                              : 'Armada bergerak. Mengirim koordinat setiap 1 mnt')
+                              ? 'Armada diam > 3 mnt. Interval pengiriman 3 mnt (hemat baterai)'
+                              : 'Armada bergerak. Mengirim koordinat setiap 8 dtk')
                           : 'GPS dalam posisi siaga. Tekan Mulai Perjalanan.',
                       style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                     ),
@@ -1155,9 +1192,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Icon(Icons.speed, size: 14, color: Colors.grey),
                     const SizedBox(width: 4),
                     Text(
-                      (_currentStage == TripStage.leavingWarehouse || _currentStage == TripStage.enRoute)
-                          ? '30 km/h (Berjalan)'
-                          : '0 km/h (Berdiam)',
+                      '$_currentSpeedKmH km/h (${_currentSpeedKmH > 0 ? 'Berjalan' : 'Berdiam'})',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -2132,4 +2167,11 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+/// Konversi aman ke int — tahan null, tipe salah, dan String.
+int _toInt(dynamic v) {
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v) ?? 0;
+  return 0;
 }

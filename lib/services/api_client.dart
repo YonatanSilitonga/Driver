@@ -4,9 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
+  // URL utama: ngrok (bisa diakses dari mana saja). Domain ngrok free bisa berubah
+  // saat tunnel di-restart di mesin lain — sesuaikan di sini kalau perlu.
   static const String _defaultUrl =
       'https://violator-krypton-image.ngrok-free.dev/api/v1';
-  static const String _fallbackUrl = 'http://192.168.20.244:8081/api/v1';
+  // Fallback: LAN laptop (harus satu Wi-Fi dengan HP) jika ngrok tidak terjangkau.
+  static const String _fallbackUrl = 'http://10.250.248.182:8080/api/v1';
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
@@ -31,7 +34,7 @@ class ApiClient {
       ),
     );
 
-    // Interceptor: otomatis tambah token & fallback IP jika ADB Reverse terputus
+    // Interceptor: otomatis tambah token & fallback otomatis ngrok -> LAN
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
@@ -45,7 +48,7 @@ class ApiClient {
           if ((e.type == DioExceptionType.connectionTimeout ||
                   e.type == DioExceptionType.connectionError) &&
               _activeBaseUrl == _defaultUrl) {
-            // Coba fallback otomatis ke IP Wi-Fi laptop (192.168.20.244)
+            // ngrok tidak terjangkau -> coba LAN laptop sekali
             _activeBaseUrl = _fallbackUrl;
             _dio = null;
             try {
@@ -201,10 +204,12 @@ class ApiClient {
   static Future<List<dynamic>> fetchVehicles() async {
     try {
       final response = await dio.get('/vehicles');
-      if (response.data != null && response.data['success'] == true) {
-        return response.data['data'] ?? [];
-      } else if (response.data is List) {
-        return response.data;
+      final body = response.data;
+      if (body is Map && body['success'] == true) {
+        final data = body['data'];
+        if (data is List) return data;
+      } else if (body is List) {
+        return body;
       }
     } catch (e) {
       print('❌ [API] Gagal fetchVehicles: $e');
@@ -219,9 +224,12 @@ class ApiClient {
         'id_driver': idDriver,
         'id_kendaraan': idKendaraan,
       });
-      
-      if (response.data != null && response.data['success'] == true) {
-        return response.data['data'];
+
+      final body = response.data;
+      if (body is Map && body['success'] == true) {
+        final data = body['data'];
+        if (data is Map<String, dynamic>) return data;
+        if (data is Map) return Map<String, dynamic>.from(data);
       }
     } catch (e) {
       print('❌ [API] Gagal fetchActiveRitase: $e');

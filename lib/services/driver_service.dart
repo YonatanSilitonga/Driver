@@ -7,8 +7,11 @@ class DriverService {
     try {
       final response = await ApiClient.dio.get('/driver/dashboard');
 
-      if (response.data['success'] == true) {
-        return response.data['data'] as Map<String, dynamic>;
+      final body = response.data;
+      if (body is Map && body['success'] == true) {
+        final data = body['data'];
+        if (data is Map<String, dynamic>) return data;
+        if (data is Map) return Map<String, dynamic>.from(data);
       }
       throw 'Gagal mengambil data dashboard';
     } on DioException catch (e) {
@@ -16,17 +19,18 @@ class DriverService {
     }
   }
 
-  static String _handleError(DioException e) {
-    if (e.response?.statusCode == 401) {
-      return 'Sesi berakhir. Silahkan login ulang.';
+ static String _handleError(DioException e) {
+    final data = e.response?.data;
+    if (data is Map && data['message'] != null) {
+      return data['message'].toString();
     }
-    if (e.response?.data?['message'] != null) {
-      return e.response!.data['message'] as String;
+    if (e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.receiveTimeout) {
+      return 'Koneksi ke server timeout. Periksa jaringan Anda.';
     }
-    if (e.type == DioExceptionType.connectionError ||
-        e.type == DioExceptionType.connectionTimeout) {
-      return 'Tidak dapat terhubung ke server.';
+    if (e.type == DioExceptionType.connectionError) {
+      return 'Tidak dapat terhubung ke server. Pastikan backend berjalan.';
     }
     return 'Terjadi kesalahan. Silahkan coba lagi.';
-  }
+}
 }
