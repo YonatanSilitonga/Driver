@@ -4,15 +4,15 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  // Default: USB + adb reverse (127.0.0.1) → backend laptop port 8080
-  // Override via: flutter run --dart-define=API_URL=http://<IP-laptop>:8080/api/v1
+  // Default → backend ngrok kawan (office). Override via:
+  //   flutter run --dart-define=API_URL=<url>/api/v1
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'http://127.0.0.1:8080/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'http://127.0.0.1:8080/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
