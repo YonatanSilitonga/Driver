@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/background_tracking.dart';
 import 'login_screen.dart';
 
 // Model data dummy Seller
@@ -597,6 +598,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm == true && mounted) {
       await AuthService.logout();
+      // Matikan background tracking + bersihkan session online di backend.
+      try { await stopBackgroundTracking(); } catch (_) {}
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginScreen()),

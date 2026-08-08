@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/api_client.dart';
+import '../services/background_tracking.dart';
 import 'main_layout.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -65,6 +66,10 @@ class _LoginScreenState extends State<LoginScreen> {
               // ignore: avoid_print
               print('⚠️ Gagal set config tracking: $e');
             }
+            // Background tracking: mulai service setelah login (layar mati tetap Online).
+            try {
+              await startBackgroundTracking();
+            } catch (_) {}
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(

@@ -3,47 +3,29 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import 'api_client.dart';
 
 /// Background tracking (foreground service) — flutter_foreground_task v10.
-/// Integrasi (menyusul saat merge):
-///   - Saat login sukses / ritase dimulai: `saveTrackingIdentity(...)` lalu `startBackgroundTracking()`.
-///   - Saat logout: `stopBackgroundTracking()` + `clearTrackingIdentity()`.
-/// Catatan Android 10+: izin "Izinkan semua waktu" diaktifkan manual di Settings.
-const _kIdDriver = 'bg_id_driver';
-const _kIdKendaraan = 'bg_id_kendaraan';
-const _kIdRitase = 'bg_id_ritase';
+/// Identitas driver/kendaraan/ritase diambil dari config yang sudah disimpan
+/// oleh `ApiClient.saveDriverConfig` (login & saat trip mulai).
+/// Integrasi:
+///   - Login sukses → `startBackgroundTracking()`
+///   - Logout → `stopBackgroundTracking()`
+///   - Android 10+: izin "Izinkan semua waktu" diaktifkan manual di Settings.
+///   - HP Xiaomi/OPPO/Vivo: exempt dari battery optimization biar gak di-kill.
 const _kBaseUrl = 'https://violator-krypton-image.ngrok-free.dev/api/v1';
 
-/// Simpan identitas driver/kendaraan saat ritase dimulai (dipanggil dari Home).
-Future<void> saveTrackingIdentity({
-  required int idDriver,
-  required int idKendaraan,
-  int? idRitase,
-}) async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setInt(_kIdDriver, idDriver);
-  await prefs.setInt(_kIdKendaraan, idKendaraan);
-  if (idRitase != null) await prefs.setInt(_kIdRitase, idRitase);
-}
-
-Future<void> clearTrackingIdentity() async {
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.remove(_kIdDriver);
-  await prefs.remove(_kIdKendaraan);
-  await prefs.remove(_kIdRitase);
-}
-
-/// Kirim heartbeat posisi ke backend dari background.
+/// Kirim heartbeat posisi ke backend dari background (layar mati / di-background).
 Future<void> _sendHeartbeat() async {
   try {
-    final prefs = await SharedPreferences.getInstance();
-    final idDriver = prefs.getInt(_kIdDriver);
-    final idKendaraan = prefs.getInt(_kIdKendaraan);
-    if (idDriver == null || idKendaraan == null) return;
+    final cfg = await ApiClient.loadDriverConfig();
+    final idDriver = cfg['id_driver'] as int? ?? 0;
+    final idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    if (idDriver <= 0 || idKendaraan <= 0) return; // identitas belum lengkap
 
     final pos = await Geolocator.getCurrentPosition();
-    final idRitase = prefs.getInt(_kIdRitase);
+    final idRitase = cfg['id_ritase'] as int? ?? 0;
 
     final dio = Dio(BaseOptions(
       baseUrl: _kBaseUrl,
@@ -58,7 +40,7 @@ Future<void> _sendHeartbeat() async {
     await dio.post('/driver/tracking', data: {
       'id_driver': idDriver,
       'id_kendaraan': idKendaraan,
-      'id_ritase': idRitase ?? 0,
+      'id_ritase': idRitase,
       'latitude': pos.latitude,
       'longitude': pos.longitude,
       'kecepatan': 0,
@@ -86,36 +68,44 @@ class _BgTaskHandler extends TaskHandler {
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
 }
 
-/// Callback untuk startService — meregistrasi TaskHandler.
 void _startCallback() {
   FlutterForegroundTask.setTaskHandler(_BgTaskHandler());
 }
 
-/// Start foreground service — panggil setelah login / saat mulai ritase.
+/// Start foreground service (jalankan sekali setelah login).
 Future<void> startBackgroundTracking() async {
-  FlutterForegroundTask.init(
-    androidNotificationOptions: AndroidNotificationOptions(
-      channelId: 'tower_control_tracking',
-      channelName: 'Tracking Armada',
-      channelDescription: 'Notifikasi saat posisi armada sedang di-track',
-    ),
-    iosNotificationOptions: IOSNotificationOptions(),
-    foregroundTaskOptions: ForegroundTaskOptions(
-      eventAction: ForegroundTaskEventAction.repeat(30000), // 30 detik
-      autoRunOnBoot: false,
-    ),
-  );
-  FlutterForegroundTask.initCommunicationPort();
-  await FlutterForegroundTask.startService(
-    serviceId: 2010,
-    serviceTypes: [ForegroundServiceTypes.location],
-    notificationTitle: 'Tower Control',
-    notificationText: 'Tracking posisi berjalan di latar belakang',
-    callback: _startCallback,
-  );
+  try {
+    if (await FlutterForegroundTask.isRunningService) return; // sudah jalan
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'tower_control_tracking',
+        channelName: 'Tracking Armada',
+        channelDescription: 'Notifikasi saat posisi armada sedang di-track',
+      ),
+      iosNotificationOptions: IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(30000), // 30 detik
+        autoRunOnBoot: false,
+      ),
+    );
+    FlutterForegroundTask.initCommunicationPort();
+    await FlutterForegroundTask.startService(
+      serviceId: 2010,
+      serviceTypes: [ForegroundServiceTypes.location],
+      notificationTitle: 'Tower Control',
+      notificationText: 'Tracking posisi berjalan di latar belakang',
+      callback: _startCallback,
+    );
+  } catch (e) {
+    print('[BG TRACK] start gagal: $e');
+  }
 }
 
 /// Stop foreground service — panggil saat logout.
 Future<void> stopBackgroundTracking() async {
-  await FlutterForegroundTask.stopService();
+  try {
+    await FlutterForegroundTask.stopService();
+  } catch (e) {
+    print('[BG TRACK] stop gagal: $e');
+  }
 }
