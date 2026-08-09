@@ -133,6 +133,8 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadConfig();
     _ensureLocationPermission();
+    // Telemetry: catat kapan app dibuka (backend users.last_open).
+    ApiClient.markAppOpen();
   }
 
   Future<void> _loadConfig() async {

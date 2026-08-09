@@ -132,6 +132,16 @@ class ApiClient {
     };
   }
 
+  /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
+  /// saat home kebuka / resume dari background.
+  static Future<void> markAppOpen() async {
+    try {
+      await dio.post('/driver/open');
+    } catch (e) {
+      print('[APP OPEN] gagal mencatat: $e');
+    }
+  }
+
   // Kirim data GPS tracking driver ke server (UPSERT: 1 posisi live per kendaraan)
   static Future<void> sendTrackingData({
     required double latitude,
