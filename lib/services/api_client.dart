@@ -4,12 +4,16 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
-  // URL utama: ngrok (bisa diakses dari mana saja). Domain ngrok free bisa berubah
-  // saat tunnel di-restart di mesin lain — sesuaikan di sini kalau perlu.
-  static const String _defaultUrl =
-      'https://violator-krypton-image.ngrok-free.dev/api/v1';
-  // Fallback: LAN laptop (harus satu Wi-Fi dengan HP) jika ngrok tidak terjangkau.
-  static const String _fallbackUrl = 'http://10.0.2.2:8080/api/v1';
+  // Default → backend ngrok kawan (office). Override via:
+  //   flutter run --dart-define=API_URL=<url>/api/v1
+  static const String _defaultUrl = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
+  );
+  static const String _fallbackUrl = String.fromEnvironment(
+    'API_URL_FALLBACK',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
+  );
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
@@ -128,6 +132,16 @@ class ApiClient {
     };
   }
 
+  /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
+  /// saat home kebuka / resume dari background.
+  static Future<void> markAppOpen() async {
+    try {
+      await dio.post('/driver/open');
+    } catch (e) {
+      print('[APP OPEN] gagal mencatat: $e');
+    }
+  }
+
   // Kirim data GPS tracking driver ke server (UPSERT: 1 posisi live per kendaraan)
   static Future<void> sendTrackingData({
     required double latitude,
@@ -197,6 +211,19 @@ class ApiClient {
       print('✅ [STATUS] Tersimpan: ${res.data}');
     } catch (e) {
       print('❌ [STATUS] Gagal mengirim: $e');
+    }
+  }
+
+  static Future<bool> finishRitase(int idRitase) async {
+    try {
+      final res = await dio.post(
+        '/driver/finish-ritase',
+        data: {'id_ritase': idRitase},
+      );
+      return res.statusCode == 200;
+    } catch (e) {
+      print('❌ [FINISH RITASE] Gagal: $e');
+      return false;
     }
   }
 
