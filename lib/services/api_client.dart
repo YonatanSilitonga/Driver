@@ -9,14 +9,14 @@ class ApiClient {
   static const String _defaultUrl =
       'https://violator-krypton-image.ngrok-free.dev/api/v1';
   // Fallback: LAN laptop (harus satu Wi-Fi dengan HP) jika ngrok tidak terjangkau.
-  static const String _fallbackUrl = 'http://10.250.248.182:8080/api/v1';
+  static const String _fallbackUrl = 'http://10.0.2.2:8080/api/v1';
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
   static String _activeBaseUrl = _defaultUrl;
 
   static Dio get dio {
-    _dio ??= _createDio();
+    _dio ??= _createDio();  
     return _dio!;
   }
 

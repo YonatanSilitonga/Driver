@@ -16,6 +16,12 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   bool _isLoading = false;
 
+  // Warna sesuai mockup
+  static const Color _navy = Color(0xFF1E293B);
+  static const Color _blueBtn = Color(0xFF2F5CDB);
+  static const Color _orange = Color(0xFFF5A623);
+  static const Color _blueWave = Color(0xFF2B4FD1);
+
   @override
   void dispose() {
     _emailController.dispose();
@@ -98,146 +104,294 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 40.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 40),
-              // Logo & Title
-              Center(
-                child: Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0D47A1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Icon(
-                        Icons.local_shipping_rounded,
-                        color: Colors.white,
-                        size: 40,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'MustGo',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF0D47A1),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Aplikasi Operasional Driver & Armada',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                    ),
-                  ],
+      backgroundColor: Colors.white,
+      body: SizedBox.expand(
+        child: Stack(
+        children: [
+          // ==== Background gradient krem -> lavender ====
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFFBE7CE), Color(0xFFF3E4E4), Color(0xFFE7E2F5)],
+                  stops: [0.0, 0.45, 1.0],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
-              const SizedBox(height: 48),
+            ),
+          ),
 
-              // Form Header
-              const Text(
-                'Login',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
-                ),
+          // ==== Wave oranye pojok kiri atas ====
+          Positioned(
+            top: 0,
+            left: 0,
+            child: ClipPath(
+              clipper: _TopCornerClipper(),
+              child: Container(
+                width: size.width * 0.6,
+                height: size.height * 0.09,
+                color: _orange,
               ),
-              const SizedBox(height: 6),
-              Text(
-                'Silahkan isi kolom username dan password anda',
-                style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-              ),
-              const SizedBox(height: 24),
+            ),
+          ),
 
-              // Username / Email Field
-              TextField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: 'Username anda',
-                  prefixIcon: const Icon(Icons.person_outline),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+          // ==== Wave dekoratif bawah (oranye + biru) ====
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SizedBox(
+              height: size.height * 0.16,
+              child: Stack(
+                children: [
+                  ClipPath(
+                    clipper: _BottomWaveClipper(offset: 0.0),
+                    child: Container(color: _orange),
                   ),
-                  filled: true,
-                  fillColor: Colors.white,
-                ),
+                  ClipPath(
+                    clipper: _BottomWaveClipper(offset: 18.0),
+                    child: Container(color: _blueWave),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
+            ),
+          ),
 
-              // Password Field
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  labelText: 'Password anda',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_off
-                          : Icons.visibility,
+          // ==== Konten utama ====
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                children: [
+                  const SizedBox(height: 36),
+
+                  // ==== Slot Logo (gambar dipasang manual oleh user) ====
+                  Container(
+                    width: 130,
+                    height: 130,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(28),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
                     ),
-                    onPressed: () =>
-                        setState(() => _obscurePassword = !_obscurePassword),
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // Login Button
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _handleLogin,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0D47A1),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 2,
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2.5,
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        // Placeholder sementara selama asset logo belum dipasang
+                        return const Center(
+                          child: Icon(
+                            Icons.local_shipping_rounded,
+                            size: 48,
+                            color: _navy,
                           ),
-                        )
-                      : const Text(
-                          'Masuk',
+                        );
+                      },
+                    ),
+                  ),
+
+                  const SizedBox(height: 32),
+
+                  // ==== Kartu Login ====
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(24, 32, 24, 28),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.06),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'Login',
+                          textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            color: _navy,
                           ),
                         ),
-                ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Satu Aplikasi untuk Semua Perjalanan',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                        ),
+
+                        const SizedBox(height: 28),
+
+                        // Email
+                        TextField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: InputDecoration(
+                            hintText: 'you@example.com',
+                            filled: true,
+                            fillColor: Colors.white,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: const BorderSide(color: _blueBtn, width: 1.5),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // Password
+                        TextField(
+                          controller: _passwordController,
+                          obscureText: _obscurePassword,
+                          decoration: InputDecoration(
+                            hintText: '••••••••',
+                            filled: true,
+                            fillColor: Colors.white,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.grey.shade300),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: const BorderSide(color: _blueBtn, width: 1.5),
+                            ),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                                size: 20,
+                                color: Colors.black38,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _obscurePassword = !_obscurePassword),
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 26),
+
+                        // Tombol Log In
+                        SizedBox(
+                          height: 52,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : _handleLogin,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _blueBtn,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(26),
+                              ),
+                            ),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2.5,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Log In',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  SizedBox(height: size.height * 0.1),
+                ],
               ),
-            ],
+            ),
           ),
+        ],
         ),
       ),
     );
   }
+}
+
+/// Clipper untuk wave oranye kecil di pojok kiri atas.
+class _TopCornerClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.moveTo(0, 0);
+    path.lineTo(size.width * 0.75, 0);
+    path.quadraticBezierTo(size.width * 0.2, size.height * 0.4, 0, size.height);
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+/// Clipper untuk wave dekoratif di bagian bawah (dipakai dua kali dengan offset berbeda).
+class _BottomWaveClipper extends CustomClipper<Path> {
+  final double offset;
+  _BottomWaveClipper({required this.offset});
+
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    path.lineTo(0, size.height * 0.55 + offset);
+    path.quadraticBezierTo(
+      size.width * 0.3,
+      size.height * 0.2 + offset,
+      size.width * 0.55,
+      size.height * 0.45 + offset,
+    );
+    path.quadraticBezierTo(
+      size.width * 0.8,
+      size.height * 0.7 + offset,
+      size.width,
+      size.height * 0.35 + offset,
+    );
+    path.lineTo(size.width, size.height);
+    path.lineTo(0, size.height);
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => oldClipper != this;
 }
 
 /// Konversi aman ke int — tahan null, tipe salah, dan String.
