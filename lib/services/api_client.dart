@@ -214,6 +214,19 @@ class ApiClient {
     }
   }
 
+  static Future<bool> finishRitase(int idRitase) async {
+    try {
+      final res = await dio.post(
+        '/driver/finish-ritase',
+        data: {'id_ritase': idRitase},
+      );
+      return res.statusCode == 200;
+    } catch (e) {
+      print('❌ [FINISH RITASE] Gagal: $e');
+      return false;
+    }
+  }
+
   // Ambil daftar kendaraan dari API Backend
   static Future<List<dynamic>> fetchVehicles() async {
     try {

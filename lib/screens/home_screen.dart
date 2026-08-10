@@ -14,6 +14,7 @@ class SellerDummy {
   final String phone;
   final int estimatedAwb;
   final int totalKoli;
+  final String jenisStop;
 
   const SellerDummy({
     required this.id,
@@ -22,6 +23,7 @@ class SellerDummy {
     required this.phone,
     required this.estimatedAwb,
     required this.totalKoli,
+    this.jenisStop = 'seller',
   });
 }
 
@@ -46,11 +48,31 @@ class CompletedStop {
 
 // Tahapan Status Perjalanan
 enum TripStage {
-  loadingGoods('Bongkar Muat Barang', 'Mengisi jumlah koli di [Nama Seller]', Icons.inventory_2_outlined),
-  leavingWarehouse('Keluar Gudang', 'Truk bergerak meninggalkan area [Nama Seller]', Icons.local_shipping_outlined),
-  enRoute('Menuju Seller', 'Sedang dalam perjalanan menuju lokasi tujuan', Icons.navigation_outlined),
-  arrived('Tiba di Seller', 'Truk telah sampai di titik lokasi tujuan', Icons.location_on_outlined),
-  completed('Selesai', 'Seluruh rangkaian penjemputan selesai', Icons.check_circle_outline);
+  loadingGoods(
+    'Bongkar Muat Barang',
+    'Mengisi jumlah koli di [Nama Seller]',
+    Icons.inventory_2_outlined,
+  ),
+  leavingWarehouse(
+    'Keluar Gudang',
+    'Truk bergerak meninggalkan area [Nama Seller]',
+    Icons.local_shipping_outlined,
+  ),
+  enRoute(
+    'Menuju Seller',
+    'Sedang dalam perjalanan menuju lokasi tujuan',
+    Icons.navigation_outlined,
+  ),
+  arrived(
+    'Tiba di Seller',
+    'Truk telah sampai di titik lokasi tujuan',
+    Icons.location_on_outlined,
+  ),
+  completed(
+    'Selesai',
+    'Seluruh rangkaian penjemputan selesai',
+    Icons.check_circle_outline,
+  );
 
   final String title;
   final String subtitle;
@@ -68,6 +90,25 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<SellerDummy> _allSellers = [];
   bool _isLoadingActiveRitase = false;
+  bool _isLastRitase = false;
+
+  String _getJenisLokasi(String? jenisStop) {
+    if (jenisStop == 'gudang') return 'Gudang';
+    if (jenisStop == 'drop_point') return 'Gateway';
+    return 'Seller';
+  }
+
+  String get _currentDestinationType {
+    return _getJenisLokasi(_currentSeller?.jenisStop);
+  }
+
+  String get _previousLocationType {
+    if (_completedStops.isNotEmpty) {
+      return _getJenisLokasi(_completedStops.last.seller.jenisStop);
+    }
+    return 'Gudang';
+  }
+
   String? _activeRitaseKode;
   String? _activeRitaseStatus;
   List<dynamic> _vehicles = [];
@@ -82,9 +123,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final List<CompletedStop> _completedStops = [];
 
   // Controllers & State untuk Input AWB & Koli saat Bongkar Muat (Dimulai dari 0)
-  final TextEditingController _awbInputController = TextEditingController(text: '0');
-  final TextEditingController _koliInputController = TextEditingController(text: '0');
-  final TextEditingController _ecerInputController = TextEditingController(text: '0');
+  final TextEditingController _awbInputController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _koliInputController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _ecerInputController = TextEditingController(
+    text: '0',
+  );
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
@@ -111,9 +158,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // ── Konstanta Smart GPS Tracking ──
   static const int _gpsRefreshEveryTicks = 8; // baca GPS tiap 8 detik
   static const int _movingSendSeconds = 8; // kirim tiap 8 detik saat bergerak
-  static const int _stationarySendSeconds = 180; // kirim tiap 3 menit saat berhenti
+  static const int _stationarySendSeconds =
+      180; // kirim tiap 3 menit saat berhenti
   static const double _speedThresholdKmh = 5; // > 5 km/jam dianggap bergerak
-  static const double _moveThresholdDeg = 0.00005; // geser > ~5 m dianggap bergerak
+  static const double _moveThresholdDeg =
+      0.00005; // geser > ~5 m dianggap bergerak
 
   // Counter throttling refresh GPS asli
   int _gpsTick = 0;
@@ -159,7 +208,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final current = _vehicles.firstWhere(
           (v) => v is Map && v['id'] == _idKendaraan,
         );
-        _selectedVehiclePlat = current is Map ? current['plat']?.toString() : null;
+        _selectedVehiclePlat = current is Map
+            ? current['plat']?.toString()
+            : null;
       } catch (_) {}
     });
   }
@@ -181,7 +232,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final filteredStops = stops.where((s) {
         // Guard: s harus Map agar pengaksesan indeks String aman
         if (s is! Map) return false;
-        return s['jenis_stop'] != 'gudang';
+        return true;
       });
       final parsedSellers = filteredStops.map((item) {
         final m = item as Map;
@@ -191,7 +242,8 @@ class _HomeScreenState extends State<HomeScreen> {
           address: m['alamat']?.toString() ?? '',
           phone: m['no_hp']?.toString() ?? '-',
           estimatedAwb: 20, // Dummy
-          totalKoli: 15,    // Dummy
+          totalKoli: 15, // Dummy
+          jenisStop: m['jenis_stop']?.toString() ?? 'seller',
         );
       }).toList();
 
@@ -199,10 +251,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _idRitase = data['id_ritase'] ?? 0;
         _activeRitaseKode = data['kode_ritase']?.toString();
         _activeRitaseStatus = data['status']?.toString();
+        _isLastRitase = data['is_last_ritase'] == true;
         _allSellers = parsedSellers;
         _isLoadingActiveRitase = false;
       });
-      
+
       // Save to config
       await ApiClient.saveDriverConfig(
         idDriver: _idDriver,
@@ -261,9 +314,14 @@ class _HomeScreenState extends State<HomeScreen> {
       // Fallback Haversine: kalau sensor tidak memberi kecepatan,
       // hitung jarak antara 2 titik GPS terakhir / selisih waktu.
       if (speedKmh == 0 &&
-          _prevLat != null && _prevLng != null && _prevFixTime != null) {
+          _prevLat != null &&
+          _prevLng != null &&
+          _prevFixTime != null) {
         final dist = Geolocator.distanceBetween(
-          _prevLat!, _prevLng!, pos.latitude, pos.longitude,
+          _prevLat!,
+          _prevLng!,
+          pos.latitude,
+          pos.longitude,
         );
         final dt = now.difference(_prevFixTime!).inSeconds;
         if (dt > 0) {
@@ -293,8 +351,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-
-
   @override
   void dispose() {
     _stopwatchTimer?.cancel();
@@ -322,23 +378,30 @@ class _HomeScreenState extends State<HomeScreen> {
           // Smart GPS Tracking upload logic
           // Berjalan -> kirim tiap 8 detik | Berhenti -> kirim tiap 3 menit
           final now = DateTime.now();
-          if (_lastSentTime == null || _lastSentLat == null || _lastSentLng == null) {
+          if (_lastSentTime == null ||
+              _lastSentLat == null ||
+              _lastSentLng == null) {
             _sendInstantTracking();
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
             final lngDiff = (_longitude - _lastSentLng!).abs();
-            final moved = _currentSpeedKmH > _speedThresholdKmh ||
+            final moved =
+                _currentSpeedKmH > _speedThresholdKmh ||
                 (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
 
             if (moved) {
               _lastMovementTime = now;
-              final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
+              final secondsSinceLastSent = now
+                  .difference(_lastSentTime!)
+                  .inSeconds;
               if (secondsSinceLastSent >= _movingSendSeconds) {
                 _sendInstantTracking(speed: _currentSpeedKmH);
               }
             } else {
               // Berhenti: kirim heartbeat tiap 3 menit (hemat baterai)
-              final secondsSinceLastSent = now.difference(_lastSentTime!).inSeconds;
+              final secondsSinceLastSent = now
+                  .difference(_lastSentTime!)
+                  .inSeconds;
               if (secondsSinceLastSent >= _stationarySendSeconds) {
                 _lastSentLat = _latitude;
                 _lastSentLng = _longitude;
@@ -391,7 +454,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<SellerDummy> get _availableSellers {
     final visitedIds = _completedStops.map((stop) => stop.seller.id).toSet();
-    return _allSellers.where((seller) => !visitedIds.contains(seller.id)).toList();
+    return _allSellers
+        .where((seller) => !visitedIds.contains(seller.id))
+        .toList();
   }
 
   void _startTripDirectly(SellerDummy seller) {
@@ -413,7 +478,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _sendInstantTracking();
   }
 
-  void _sendInstantTracking({int? speed, int durasiDetik = 0, TripStage? stage}) {
+  void _sendInstantTracking({
+    int? speed,
+    int durasiDetik = 0,
+    TripStage? stage,
+  }) {
     final now = DateTime.now();
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
@@ -450,15 +519,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String get _currentStageTitle {
+    final currLoc = _currentDestinationType;
+    final prevLoc = _previousLocationType;
+
     switch (_currentStage) {
       case TripStage.loadingGoods:
         return 'Bongkar Muat Barang';
       case TripStage.leavingWarehouse:
-        return 'Keluar Gudang';
+        return 'Keluar $prevLoc';
       case TripStage.enRoute:
-        return 'Menuju ${_currentSeller?.name ?? "Seller"}';
+        return 'Menuju ${_currentSeller?.name ?? currLoc}';
       case TripStage.arrived:
-        return 'Tiba di ${_currentSeller?.name ?? "Seller"}';
+        return 'Tiba di ${_currentSeller?.name ?? currLoc}';
       case TripStage.completed:
         return 'Selesai';
     }
@@ -541,7 +613,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         title: Text(v['plat']?.toString() ?? '-'),
                         subtitle: Text('${v['type']} - ${v['capacity_kg']}kg'),
-                        trailing: isSelected ? const Icon(Icons.check_circle, color: Colors.blue) : null,
+                        trailing: isSelected
+                            ? const Icon(Icons.check_circle, color: Colors.blue)
+                            : null,
                         onTap: () async {
                           Navigator.pop(ctx);
                           setState(() {
@@ -571,19 +645,30 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (dialogCtx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
               Icon(Icons.logout_rounded, color: Colors.redAccent),
               SizedBox(width: 8),
-              Text('Konfirmasi Logout', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(
+                'Konfirmasi Logout',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           content: const Text('Apakah Anda yakin ingin keluar dari akun ini?'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogCtx, false),
-              child: const Text('Batal', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Batal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () => Navigator.pop(dialogCtx, true),
@@ -591,7 +676,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 backgroundColor: Colors.redAccent,
                 foregroundColor: Colors.white,
               ),
-              child: const Text('Keluar', style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Keluar',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -601,7 +689,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirm == true && mounted) {
       await AuthService.logout();
       // Matikan background tracking + bersihkan session online di backend.
-      try { await stopBackgroundTracking(); } catch (_) {}
+      try {
+        await stopBackgroundTracking();
+      } catch (_) {}
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -617,10 +707,16 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
-              Icon(Icons.help_outline_rounded, color: Color(0xFFFF8F00), size: 26),
+              Icon(
+                Icons.help_outline_rounded,
+                color: Color(0xFFFF8F00),
+                size: 26,
+              ),
               SizedBox(width: 8),
               Text(
                 'Konfirmasi Status',
@@ -635,7 +731,10 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 TextSpan(
                   text: _getNextStageButtonLabel(),
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0D47A1),
+                  ),
                 ),
                 const TextSpan(text: '?'),
               ],
@@ -646,7 +745,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text(
                 'Batal',
-                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             ElevatedButton(
@@ -657,7 +759,9 @@ class _HomeScreenState extends State<HomeScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF8F00),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               child: const Text(
                 'Ya, Lanjutkan',
@@ -672,15 +776,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
-      final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
-      final inputEcer = int.tryParse(_ecerInputController.text.trim()) ?? _currentActualEcer;
+      final inputKoli =
+          int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
+      final inputEcer =
+          int.tryParse(_ecerInputController.text.trim()) ?? _currentActualEcer;
       _currentActualKoli = inputKoli;
       _currentActualEcer = inputEcer;
     }
 
     // Catat stage yang sedang berakhir (untuk riwayat status backend)
     final finishedStage = _currentStage;
-    final finishedDuration = _currentStageDurations[finishedStage] ?? _activeStageSeconds;
+    final finishedDuration =
+        _currentStageDurations[finishedStage] ?? _activeStageSeconds;
 
     setState(() {
       _currentStageDurations[_currentStage] = _activeStageSeconds;
@@ -699,7 +806,10 @@ class _HomeScreenState extends State<HomeScreen> {
         case TripStage.arrived:
           _currentStage = TripStage.completed;
           if (_currentSeller != null) {
-            final stopTotalDuration = _currentStageDurations.values.fold(0, (sum, dur) => sum + dur);
+            final stopTotalDuration = _currentStageDurations.values.fold(
+              0,
+              (sum, dur) => sum + dur,
+            );
             _completedStops.add(
               CompletedStop(
                 seller: _currentSeller!,
@@ -731,11 +841,41 @@ class _HomeScreenState extends State<HomeScreen> {
     _sendInstantTracking(durasiDetik: finishedDuration, stage: finishedStage);
   }
 
-  void _finishEntireRoute() {
+  Future<void> _finishEntireRoute() async {
     _stopTimer();
     setState(() {
-      _isEntireRouteCompleted = true;
+      _isLoadingActiveRitase = true;
     });
+
+    // Call backend to finish Ritase
+    final success = await ApiClient.finishRitase(_idRitase);
+    if (!success) {
+      _showSnack('Gagal menyelesaikan ritase di server');
+      setState(() {
+        _isLoadingActiveRitase = false;
+      });
+      return;
+    }
+
+    // Fetch next ritase
+    await _fetchActiveRitase();
+
+    if (_idRitase != 0) {
+      _showSnack('Berhasil lanjut ke rute berikutnya!');
+      setState(() {
+        _isTripStarted = true;
+        _currentStage = TripStage.loadingGoods;
+        _activeStageSeconds = 0;
+        _currentStageDurations.clear();
+      });
+      _startTimer();
+      _sendInstantTracking();
+    } else {
+      setState(() {
+        _isEntireRouteCompleted = true;
+      });
+      _showSnack('Seluruh jadwal hari ini telah selesai!');
+    }
   }
 
   String _formatDuration(int seconds) {
@@ -754,7 +894,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$minutes mnt $remainingSeconds dtk';
   }
 
-  
   Future<void> _startFreeTrip() async {
     setState(() {
       _isLoadingActiveRitase = true;
@@ -786,12 +925,11 @@ class _HomeScreenState extends State<HomeScreen> {
     for (var s in rawSellers) {
       if (s is Map) {
         final id = int.tryParse(s['id_seller']?.toString() ?? '');
-        final name = (s['nama_seller'] ?? s['name'] ?? s['nama'] ?? 'Seller #$id').toString();
+        final name =
+            (s['nama_seller'] ?? s['name'] ?? s['nama'] ?? 'Seller #$id')
+                .toString();
         if (id != null) {
-          uniqueSellers[id] = {
-            'id_seller': id,
-            'nama_seller': name,
-          };
+          uniqueSellers[id] = {'id_seller': id, 'nama_seller': name};
         }
       }
     }
@@ -818,13 +956,21 @@ class _HomeScreenState extends State<HomeScreen> {
             return Padding(
               padding: EdgeInsets.only(
                 bottom: MediaQuery.of(context).viewInsets.bottom,
-                left: 20, right: 20, top: 20,
+                left: 20,
+                right: 20,
+                top: 20,
               ),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Tambah Lokasi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text(
+                      'Tambah Lokasi',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<int>(
                       decoration: const InputDecoration(
@@ -852,13 +998,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       onPressed: () async {
                         if (selectedSellerId == null) return;
                         Navigator.pop(ctx);
-                        final res = await ApiClient.addStop(_idRitase, selectedSellerId!);
+                        final res = await ApiClient.addStop(
+                          _idRitase,
+                          selectedSellerId!,
+                        );
                         if (res != null) {
                           await _fetchActiveRitase();
                           setState(() {
-                             if (_allSellers.isNotEmpty) {
-                               _currentSeller = _allSellers.last;
-                             }
+                            if (_allSellers.isNotEmpty) {
+                              _currentSeller = _allSellers.last;
+                            }
                           });
                           _showSnack('Berhasil menambahkan lokasi!');
                         } else {
@@ -883,7 +1032,9 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
               Icon(Icons.arrow_back, color: Color(0xFF0D47A1), size: 24),
@@ -903,7 +1054,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text(
                 'Batal',
-                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
             ElevatedButton(
@@ -914,7 +1068,9 @@ class _HomeScreenState extends State<HomeScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0D47A1),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               child: const Text(
                 'Ya, Kembali',
@@ -1021,12 +1177,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         icon: const Icon(Icons.explore, size: 26),
                         label: const Text(
                           'Mulai Perjalanan Bebas',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blueAccent,
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                           elevation: 3,
                         ),
                       ),
@@ -1040,23 +1201,30 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: ElevatedButton.icon(
                     onPressed: () {
                       if (_allSellers.isNotEmpty) {
-                      _startTripDirectly(_allSellers.first);
-                    }
-                  },
-                  icon: const Icon(Icons.play_arrow_rounded, size: 26),
-                  label: const Text(
-                    'Mulai Perjalanan',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0D47A1),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 2,
+                        _startTripDirectly(_allSellers.first);
+                      }
+                    },
+                    icon: const Icon(Icons.play_arrow_rounded, size: 26),
+                    label: const Text(
+                      'Mulai Perjalanan',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0D47A1),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      elevation: 2,
+                    ),
                   ),
                 ),
-              ),
             ],
+
+            const SizedBox(height: 16),
 
             // Ringkasan Riwayat Seller yang Sudah Dikunjungi (Jika Ada)
             if (_completedStops.isNotEmpty) ...[
@@ -1084,9 +1252,14 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildGpsTrackingBanner() {
     final isActive = _isTripStarted && !_isEntireRouteCompleted;
     final now = DateTime.now();
-    final secondsSinceLastMove = _lastMovementTime != null ? now.difference(_lastMovementTime!).inSeconds : 0;
-    final isBatterySaver = isActive && secondsSinceLastMove >= _stationarySendSeconds && 
-        (_currentStage == TripStage.loadingGoods || _currentStage == TripStage.arrived);
+    final secondsSinceLastMove = _lastMovementTime != null
+        ? now.difference(_lastMovementTime!).inSeconds
+        : 0;
+    final isBatterySaver =
+        isActive &&
+        secondsSinceLastMove >= _stationarySendSeconds &&
+        (_currentStage == TripStage.loadingGoods ||
+            _currentStage == TripStage.arrived);
 
     final String modeLabel = !isActive
         ? 'Standby'
@@ -1102,7 +1275,10 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: statusColor.withValues(alpha: 0.3), width: 1.2),
+        border: Border.all(
+          color: statusColor.withValues(alpha: 0.3),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
             color: statusColor.withValues(alpha: 0.05),
@@ -1121,7 +1297,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.satellite_alt_rounded, color: statusColor, size: 20),
+                child: Icon(
+                  Icons.satellite_alt_rounded,
+                  color: statusColor,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1140,7 +1320,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(width: 6),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: statusColor.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(6),
@@ -1160,8 +1343,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text(
                       isActive
                           ? (isBatterySaver
-                              ? 'Armada diam > 3 mnt. Interval pengiriman 3 mnt (hemat baterai)'
-                              : 'Armada bergerak. Mengirim koordinat setiap 8 dtk')
+                                ? 'Armada diam > 3 mnt. Interval pengiriman 3 mnt (hemat baterai)'
+                                : 'Armada bergerak. Mengirim koordinat setiap 8 dtk')
                           : 'GPS dalam posisi siaga. Tekan Mulai Perjalanan.',
                       style: TextStyle(fontSize: 11, color: Colors.grey[600]),
                     ),
@@ -1179,7 +1362,11 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.my_location, size: 14, color: Color(0xFF0D47A1)),
+                    const Icon(
+                      Icons.my_location,
+                      size: 14,
+                      color: Color(0xFF0D47A1),
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       '${_latitude.toStringAsFixed(6)}, ${_longitude.toStringAsFixed(6)}',
@@ -1218,12 +1405,19 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildVehicleCard() {
     Map<String, dynamic>? currentVehicle;
     try {
-      currentVehicle = _vehicles.firstWhere((v) => v['id'] == _idKendaraan) as Map<String, dynamic>?;
+      currentVehicle =
+          _vehicles.firstWhere((v) => v['id'] == _idKendaraan)
+              as Map<String, dynamic>?;
     } catch (_) {}
 
-    final plat = currentVehicle?['plat']?.toString() ?? _selectedVehiclePlat ?? 'B 9806 UXV';
+    final plat =
+        currentVehicle?['plat']?.toString() ??
+        _selectedVehiclePlat ??
+        'B 9806 UXV';
     final type = currentVehicle?['type']?.toString() ?? 'CDDL';
-    final capacity = currentVehicle?['capacity_kg'] != null ? '${currentVehicle!['capacity_kg']} kg' : '7.000 kg (7 Ton)';
+    final capacity = currentVehicle?['capacity_kg'] != null
+        ? '${currentVehicle!['capacity_kg']} kg'
+        : '7.000 kg (7 Ton)';
 
     return InkWell(
       onTap: _showVehicleSelection,
@@ -1234,7 +1428,9 @@ class _HomeScreenState extends State<HomeScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF0D47A1).withValues(alpha: 0.2)),
+          border: Border.all(
+            color: const Color(0xFF0D47A1).withValues(alpha: 0.2),
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.04),
@@ -1251,16 +1447,27 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 const Row(
                   children: [
-                    Icon(Icons.local_shipping_outlined, color: Color(0xFF0D47A1), size: 20),
+                    Icon(
+                      Icons.local_shipping_outlined,
+                      color: Color(0xFF0D47A1),
+                      size: 20,
+                    ),
                     SizedBox(width: 8),
                     Text(
                       'Kendaraan Operasional',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
                     ),
                   ],
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(6),
@@ -1269,10 +1476,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Text(
                         'Ganti',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0D47A1),
+                        ),
                       ),
                       SizedBox(width: 2),
-                      Icon(Icons.chevron_right, size: 14, color: Color(0xFF0D47A1)),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 14,
+                        color: Color(0xFF0D47A1),
+                      ),
                     ],
                   ),
                 ),
@@ -1288,7 +1503,10 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.black,
                       borderRadius: BorderRadius.circular(6),
@@ -1310,12 +1528,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Text(
                           'Jenis: $type',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.black87),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           'Kapasitas: $capacity',
-                          style: const TextStyle(fontSize: 11, color: Colors.grey),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey,
+                          ),
                         ),
                       ],
                     ),
@@ -1354,7 +1579,11 @@ class _HomeScreenState extends State<HomeScreen> {
               color: const Color(0xFF0D47A1).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.warehouse_outlined, color: Color(0xFF0D47A1), size: 28),
+            child: const Icon(
+              Icons.warehouse_outlined,
+              color: Color(0xFF0D47A1),
+              size: 28,
+            ),
           ),
           const SizedBox(width: 12),
           const Expanded(
@@ -1363,12 +1592,20 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Text(
                   'Asal Gudang',
-                  style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 SizedBox(height: 2),
                 Text(
                   'Gudang Outgoing Utama',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0D47A1)),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: Color(0xFF0D47A1),
+                  ),
                 ),
               ],
             ),
@@ -1404,7 +1641,11 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
               Text(
                 'Riwayat Penjemputan Selesai (${_completedStops.length})',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.green),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: Colors.green,
+                ),
               ),
             ],
           ),
@@ -1424,11 +1665,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   Container(
                     width: 22,
                     height: 22,
-                    decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                    decoration: const BoxDecoration(
+                      color: Colors.green,
+                      shape: BoxShape.circle,
+                    ),
                     child: Center(
                       child: Text(
                         '$idx',
-                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ),
@@ -1439,11 +1687,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Text(
                           stop.seller.name,
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: Colors.black87,
+                          ),
                         ),
                         Text(
                           '${stop.actualAwb} AWB, ${stop.actualKoli} Koli, ${stop.actualEcer} Ecer • Durasi: ${_formatReadableDuration(stop.totalDurationSeconds)}',
-                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.grey[600],
+                          ),
                         ),
                       ],
                     ),
@@ -1478,7 +1733,11 @@ class _HomeScreenState extends State<HomeScreen> {
             const Expanded(
               child: Text(
                 'Lokasi Seller (Belum Dipilih)',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: Colors.black87,
+                ),
               ),
             ),
             OutlinedButton.icon(
@@ -1486,7 +1745,10 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.add_location_alt, size: 16),
               label: const Text('Pilih Seller', style: TextStyle(fontSize: 12)),
               style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -1511,14 +1773,21 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFF8F00),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   'SELLER TUJUAN #${_completedStops.length + 1}',
-                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -1530,11 +1799,17 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 const TextSpan(
                   text: 'Nama Seller : ',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0D47A1),
+                  ),
                 ),
                 TextSpan(
                   text: seller.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
                 ),
               ],
             ),
@@ -1542,15 +1817,20 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           RichText(
             text: TextSpan(
-              style: TextStyle(fontSize: 13, color: Colors.grey[800], height: 1.3),
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.grey[800],
+                height: 1.3,
+              ),
               children: [
                 const TextSpan(
                   text: 'Alamat : ',
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
                 ),
-                TextSpan(
-                  text: seller.address,
-                ),
+                TextSpan(text: seller.address),
               ],
             ),
           ),
@@ -1587,18 +1867,29 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               const Text(
                 'Status Perjalanan (Live Track)',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0D47A1),
+                ),
               ),
               if (_currentStage != TripStage.completed)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0D47A1).withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.hourglass_top, size: 14, color: Color(0xFF0D47A1)),
+                      const Icon(
+                        Icons.hourglass_top,
+                        size: 14,
+                        color: Color(0xFF0D47A1),
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         _formatDuration(_activeStageSeconds),
@@ -1625,9 +1916,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
             String stageTitle = stage.title;
             if (stage == TripStage.enRoute) {
-              stageTitle = 'Sedang Menuju ke ${_currentSeller?.name ?? "Seller"}';
+              stageTitle =
+                  'Sedang Menuju ke ${_currentSeller?.name ?? _currentDestinationType}';
             } else if (stage == TripStage.arrived) {
-              stageTitle = 'Tiba di ${_currentSeller?.name ?? "Seller"}';
+              stageTitle =
+                  'Tiba di ${_currentSeller?.name ?? _currentDestinationType}';
+            } else if (stage == TripStage.leavingWarehouse) {
+              stageTitle = 'Keluar $_previousLocationType';
             }
 
             return IntrinsicHeight(
@@ -1644,16 +1939,20 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: isPassed
                               ? Colors.green
                               : isCurrent
-                                  ? const Color(0xFF0D47A1)
-                                  : Colors.grey.shade200,
+                              ? const Color(0xFF0D47A1)
+                              : Colors.grey.shade200,
                           border: Border.all(
-                            color: isCurrent ? const Color(0xFFFF8F00) : Colors.transparent,
+                            color: isCurrent
+                                ? const Color(0xFFFF8F00)
+                                : Colors.transparent,
                             width: 2,
                           ),
                         ),
                         child: Icon(
                           isPassed ? Icons.check : stage.icon,
-                          color: (isPassed || isCurrent) ? Colors.white : Colors.grey,
+                          color: (isPassed || isCurrent)
+                              ? Colors.white
+                              : Colors.grey,
                           size: 16,
                         ),
                       ),
@@ -1661,7 +1960,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         Expanded(
                           child: Container(
                             width: 2,
-                            color: isPassed ? Colors.green : Colors.grey.shade300,
+                            color: isPassed
+                                ? Colors.green
+                                : Colors.grey.shade300,
                           ),
                         ),
                     ],
@@ -1676,28 +1977,40 @@ class _HomeScreenState extends State<HomeScreen> {
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(
-                                stageTitle,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
-                                  color: isPassed
-                                      ? Colors.green[800]
-                                      : isCurrent
-                                          ? const Color(0xFF0D47A1)
-                                          : Colors.grey[700],
+                              Expanded(
+                                child: Text(
+                                  stageTitle,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: isCurrent
+                                        ? FontWeight.bold
+                                        : FontWeight.w600,
+                                    color: isPassed
+                                        ? Colors.green[800]
+                                        : isCurrent
+                                        ? const Color(0xFF0D47A1)
+                                        : Colors.grey[700],
+                                  ),
                                 ),
                               ),
-                              if (durationInSec != null)
+                              if (durationInSec != null) ...[
+                                const SizedBox(width: 8),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.green[50],
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
                                     children: [
-                                      const Icon(Icons.timer, size: 11, color: Colors.green),
+                                      const Icon(
+                                        Icons.timer,
+                                        size: 11,
+                                        color: Colors.green,
+                                      ),
                                       const SizedBox(width: 3),
                                       Text(
                                         _formatReadableDuration(durationInSec),
@@ -1710,15 +2023,30 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ],
                                   ),
                                 ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 2),
-                          Text(
-                            stage.subtitle.replaceAll('[Nama Seller]', sellerName),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isCurrent ? Colors.black87 : Colors.grey[600],
-                            ),
+                          Builder(
+                            builder: (context) {
+                              String stageSubtitle = stage.subtitle.replaceAll(
+                                '[Nama Seller]',
+                                sellerName,
+                              );
+                              if (stage == TripStage.leavingWarehouse) {
+                                stageSubtitle =
+                                    'Truk bergerak meninggalkan area $_previousLocationType';
+                              }
+                              return Text(
+                                stageSubtitle,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isCurrent
+                                      ? Colors.black87
+                                      : Colors.grey[600],
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ),
@@ -1747,12 +2075,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: const Icon(Icons.navigation_outlined, size: 22),
                 label: Text(
                   _getNextStageButtonLabel(),
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFFF8F00),
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   elevation: 2,
                 ),
               ),
@@ -1773,7 +2106,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: Text(
                       'Penjemputan di ${_currentSeller?.name} Selesai! ($_currentActualAwb AWB, $_currentActualKoli Koli, $_currentActualEcer Ecer)',
-                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
                     ),
                   ),
                 ],
@@ -1782,9 +2118,6 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 14),
 
             // Tombol Opsi Multi-Seller
-
-
-
             if (hasMoreSellers) ...[
               SizedBox(
                 width: double.infinity,
@@ -1797,18 +2130,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                   icon: const Icon(Icons.add_location_alt_outlined),
                   label: const Text(
-                    'Lanjut ke Seller Berikutnya',
+                    'Lanjut ke ritase Berikutnya',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0D47A1),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 8),
-            ] else ...[
+            ] else if (_idRitase == 0) ...[
               SizedBox(
                 width: double.infinity,
                 height: 48,
@@ -1837,7 +2172,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0D47A1),
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                 ),
               ),
@@ -1848,9 +2185,11 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: _finishEntireRoute,
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 44),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
-              child: const Text('Selesaikan Seluruh Rute Perjalanan'),
+              child: Text(_isLastRitase ? 'Selesaikan Seluruh Ritase Hari Ini' : 'Selesaikan Ritase & Lanjut Rute Berikutnya'),
             ),
           ],
         ],
@@ -1879,7 +2218,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: const Color(0xFFFF8F00),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.touch_app, color: Colors.white, size: 20),
+                child: const Icon(
+                  Icons.touch_app,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 10),
               const Expanded(
@@ -1888,7 +2231,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       'Input Realisasi Muatan Barang',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.black87,
+                      ),
                     ),
                     Text(
                       'Masukkan jumlah Koli yang diangkut',
@@ -1939,7 +2286,11 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 8),
               Text(
                 label,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: Colors.black87,
+                ),
               ),
             ],
           ),
@@ -1967,7 +2318,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       border: Border.all(color: Colors.red.shade300),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.remove, color: Colors.red, size: 28),
+                    child: const Icon(
+                      Icons.remove,
+                      color: Colors.red,
+                      size: 28,
+                    ),
                   ),
                 ),
               ),
@@ -2022,11 +2377,23 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildQuickAddChip(controller: controller, amount: 10, label: '+10'),
+                _buildQuickAddChip(
+                  controller: controller,
+                  amount: 10,
+                  label: '+10',
+                ),
                 const SizedBox(width: 8),
-                _buildQuickAddChip(controller: controller, amount: 100, label: '+100'),
+                _buildQuickAddChip(
+                  controller: controller,
+                  amount: 100,
+                  label: '+100',
+                ),
                 const SizedBox(width: 8),
-                _buildQuickAddChip(controller: controller, amount: 1000, label: '+1000'),
+                _buildQuickAddChip(
+                  controller: controller,
+                  amount: 1000,
+                  label: '+1000',
+                ),
                 const SizedBox(width: 8),
                 _buildResetChip(controller: controller),
               ],
@@ -2056,7 +2423,9 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            border: Border.all(color: const Color(0xFFFF8F00).withValues(alpha: 0.5)),
+            border: Border.all(
+              color: const Color(0xFFFF8F00).withValues(alpha: 0.5),
+            ),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
@@ -2109,15 +2478,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _getNextStageButtonLabel() {
+    final prevLoc = _previousLocationType;
+    final currLoc = _currentDestinationType;
+
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Selesai Muat -> Keluar Gudang';
+        return 'Selesai Muat -> Keluar $prevLoc';
       case TripStage.leavingWarehouse:
-        return 'Keluar Gudang -> Menuju Seller';
+        return 'Keluar $prevLoc -> Menuju $currLoc';
       case TripStage.enRoute:
-        return 'Tiba di Lokasi Seller';
+        return 'Tiba di Lokasi $currLoc';
       case TripStage.arrived:
-        return 'Selesaikan Penjemputan Seller Ini';
+        return 'Selesaikan Penjemputan di $currLoc Ini';
       case TripStage.completed:
         return 'Penjemputan Selesai';
     }
@@ -2145,7 +2517,11 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 12),
           const Text(
             'Seluruh Perjalanan Selesai!',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
@@ -2165,7 +2541,9 @@ class _HomeScreenState extends State<HomeScreen> {
               backgroundColor: Colors.green[700],
               foregroundColor: Colors.white,
               minimumSize: const Size(double.infinity, 48),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
         ],
