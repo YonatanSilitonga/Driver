@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -11,7 +11,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SLB Driver App',
+      title: 'Tower Control Driver App',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -35,50 +35,7 @@ class MyApp extends StatelessWidget {
           foregroundColor: Colors.white,
         ),
       ),
-      home: const SplashRouter(),
-    );
-  }
-}
-
-/// Cek token, arahkan ke Login atau Home
-class SplashRouter extends StatefulWidget {
-  const SplashRouter({super.key});
-
-  @override
-  State<SplashRouter> createState() => _SplashRouterState();
-}
-
-class _SplashRouterState extends State<SplashRouter> {
-  @override
-  void initState() {
-    super.initState();
-    _checkAuth();
-  }
-
-  Future<void> _checkAuth() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => const LoginScreen(),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Color(0xFFF8F9FA),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.hub_outlined, size: 64, color: Color(0xFF0D47A1)),
-            SizedBox(height: 16),
-            CircularProgressIndicator(color: Color(0xFF0D47A1)),
-          ],
-        ),
-      ),
+      home: const SplashScreen(),
     );
   }
 }

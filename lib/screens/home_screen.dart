@@ -46,6 +46,23 @@ class CompletedStop {
   });
 }
 
+// Helper class untuk step timeline dinamis
+class _TimelineStep {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final int segIndex;   // indeks segmen (0 = segmen pertama)
+  final int stageIndex; // 0=loading,1=leaving,2=enRoute,3=arrived,-1=completed
+
+  const _TimelineStep({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.segIndex,
+    required this.stageIndex,
+  });
+}
+
 // Tahapan Status Perjalanan
 enum TripStage {
   loadingGoods(
@@ -262,6 +279,15 @@ class _HomeScreenState extends State<HomeScreen> {
         idKendaraan: _idKendaraan,
         idRitase: _idRitase,
       );
+    } else if (data != null && data['all_completed'] == true) {
+      setState(() {
+        _idRitase = 0;
+        _activeRitaseKode = null;
+        _activeRitaseStatus = null;
+        _isLoadingActiveRitase = false;
+        _isTripStarted = true;
+        _isEntireRouteCompleted = true;
+      });
     } else {
       setState(() {
         _idRitase = 0;
@@ -804,7 +830,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _currentStage = TripStage.arrived;
           break;
         case TripStage.arrived:
-          _currentStage = TripStage.completed;
+          // Catat segmen ini ke completedStops (yang di-save adalah ORIGIN stop, bukan destination)
           if (_currentSeller != null) {
             final stopTotalDuration = _currentStageDurations.values.fold(
               0,
@@ -820,6 +846,28 @@ class _HomeScreenState extends State<HomeScreen> {
                 stageDurations: Map.from(_currentStageDurations),
               ),
             );
+          }
+
+          // Cek apakah ada segmen berikutnya:
+          // _currentSeller saat ini adalah ORIGIN dari segmen (allSellers[i])
+          // Tujuan dari segmen ini adalah allSellers[i+1]
+          // Ada segmen berikutnya hanya jika allSellers[i+2] ada (ada origin berikutnya)
+          // Yaitu: _completedStops.length < allSellers.length - 1
+          final nextOriginIndex = _completedStops.length; // index SETELAH add
+          if (nextOriginIndex < _allSellers.length - 1) {
+            // Masih ada origin berikutnya → pindah ke segmen/origin berikutnya
+            _currentSeller = _allSellers[nextOriginIndex];
+            _currentStage = TripStage.loadingGoods;
+            _currentStageDurations.clear();
+            _currentActualAwb = 0;
+            _currentActualKoli = 0;
+            _currentActualEcer = 0;
+            _awbInputController.text = '0';
+            _koliInputController.text = '0';
+            _ecerInputController.text = '0';
+          } else {
+            // Sudah tiba di tujuan akhir → ritase selesai
+            _currentStage = TripStage.completed;
           }
           break;
         case TripStage.completed:
@@ -842,6 +890,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _finishEntireRoute() async {
+    final wasLast = _isLastRitase;
     _stopTimer();
     setState(() {
       _isLoadingActiveRitase = true;
@@ -857,10 +906,19 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Reset current trip state
+    setState(() {
+      _isTripStarted = false;
+      _completedStops.clear();
+      _currentStage = TripStage.loadingGoods;
+      _activeStageSeconds = 0;
+      _currentStageDurations.clear();
+    });
+
     // Fetch next ritase
     await _fetchActiveRitase();
 
-    if (_idRitase != 0) {
+    if (_idRitase != 0 && !wasLast) {
       _showSnack('Berhasil lanjut ke rute berikutnya!');
       setState(() {
         _isTripStarted = true;
@@ -1099,11 +1157,6 @@ class _HomeScreenState extends State<HomeScreen> {
             : null,
         actions: [
           IconButton(
-            icon: const Icon(Icons.directions_car),
-            tooltip: 'Pilih Kendaraan',
-            onPressed: _showVehicleSelection,
-          ),
-          IconButton(
             onPressed: _resetSimulation,
             icon: const Icon(Icons.refresh),
             tooltip: 'Reset Simulasi',
@@ -1115,29 +1168,31 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Sederhana: Hai, AWALUDIN! (Tampil saat di Beranda)
-            if (!_isTripStarted) ...[
-              Text(
-                'Hai, $_driverName!',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await _fetchActiveRitase();
+        },
+        color: const Color(0xFF0D47A1),
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Sederhana: Hai, AWALUDIN! (Tampil saat di Beranda)
+              if (!_isTripStarted) ...[
+                Text(
+                  'Hai, $_driverName!',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              _buildVehicleCard(),
-              const SizedBox(height: 14),
-            ],
-
-            // Banner GPS Live Tracking Real-Time
-            _buildGpsTrackingBanner(),
-            const SizedBox(height: 14),
+                const SizedBox(height: 14),
+                _buildVehicleCard(),
+                const SizedBox(height: 14),
+              ],
 
             // Banner Gudang Outgoing Utama
             _buildWarehouseCard(),
@@ -1146,53 +1201,26 @@ class _HomeScreenState extends State<HomeScreen> {
             // Tombol Mulai Perjalanan langsung di bawah Asal Gudang (saat di Beranda)
             if (!_isTripStarted) ...[
               if (_allSellers.isEmpty)
-                Column(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.shade50,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.amber.shade300),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.info_outline, color: Colors.amber),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Belum ada penugasan rute untuk kendaraan ini. Anda dapat memulai perjalanan bebas.',
-                              style: TextStyle(color: Colors.black87),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton.icon(
-                        onPressed: _startFreeTrip,
-                        icon: const Icon(Icons.explore, size: 26),
-                        label: const Text(
-                          'Mulai Perjalanan Bebas',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueAccent,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          elevation: 3,
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.amber.shade300),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.amber),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Belum ada penugasan rute harian untuk kendaraan ini.',
+                          style: TextStyle(color: Colors.black87),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 )
               else
                 SizedBox(
@@ -1201,6 +1229,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: ElevatedButton.icon(
                     onPressed: () {
                       if (_allSellers.isNotEmpty) {
+                        setState(() {
+                          _completedStops.clear();
+                        });
                         _startTripDirectly(_allSellers.first);
                       }
                     },
@@ -1245,7 +1276,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 
   // Card GPS Live Tracking Real-Time dengan Indikator Mode Smart Interval
@@ -1401,7 +1433,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Kotak Informasi Kendaraan yang dikendarai (Dapat diklik untuk memilih kendaraan)
+  // Kotak Informasi Kendaraan yang dikendarai (Dapat diklik untuk memilih/mengganti kendaraan)
   Widget _buildVehicleCard() {
     Map<String, dynamic>? currentVehicle;
     try {
@@ -1475,7 +1507,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: const Row(
                     children: [
                       Text(
-                        'Ganti',
+                        'Pilih / Ganti',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
@@ -1758,6 +1790,23 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
+    String badgeText = 'LOKASI TUJUAN #${_completedStops.length + 1}';
+    String labelName = 'Nama Lokasi : ';
+
+    final currentStopNum = _completedStops.length + 1;
+    final totalStops = _allSellers.length;
+
+    if (seller.jenisStop == 'gudang') {
+      badgeText = 'GUDANG — STOP $currentStopNum dari $totalStops';
+      labelName = 'Nama Gudang : ';
+    } else if (seller.jenisStop == 'drop_point') {
+      badgeText = 'GATEWAY — STOP $currentStopNum dari $totalStops';
+      labelName = 'Nama Gateway : ';
+    } else if (seller.jenisStop == 'seller') {
+      badgeText = 'SELLER — STOP $currentStopNum dari $totalStops';
+      labelName = 'Nama Seller : ';
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -1782,7 +1831,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  'SELLER TUJUAN #${_completedStops.length + 1}',
+                  badgeText,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -1792,14 +1841,41 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 10),
+          // Progress bar visual semua stop
+          Row(
+            children: List.generate(totalStops, (i) {
+              final isDone = i < _completedStops.length;
+              final isCurrent = i == _completedStops.length;
+              return Expanded(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: isDone
+                        ? Colors.green
+                        : isCurrent
+                            ? const Color(0xFFFF8F00)
+                            : Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Progres: ${_completedStops.length} / $totalStops stop selesai',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+          ),
           const SizedBox(height: 12),
           RichText(
             text: TextSpan(
               style: const TextStyle(fontSize: 14, color: Colors.black87),
               children: [
-                const TextSpan(
-                  text: 'Nama Seller : ',
-                  style: TextStyle(
+                TextSpan(
+                  text: labelName,
+                  style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF0D47A1),
                   ),
@@ -1841,9 +1917,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Timeline Status Perjalanan + Form Input Driver-Friendly di Bagian Bawah
   Widget _buildTimelineStatusCard() {
-    final sellerName = _currentSeller?.name ?? 'Seller';
-    final hasMoreSellers = _availableSellers.isNotEmpty;
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -1907,153 +1980,207 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Render Steps Timeline
-          ...TripStage.values.map((stage) {
-            final isCurrent = _currentStage == stage;
-            final isPassed = stage.index < _currentStage.index;
-            final isLast = stage == TripStage.completed;
-            final durationInSec = _currentStageDurations[stage];
+          // ── Render Full Expanded Timeline ─────────────────────────────────
+          // Bangun flat list semua step untuk seluruh segmen ritase
+          // Setiap segmen i: origin = allSellers[i], tujuan = allSellers[i+1]
+          // Steps: [Bongkar Muat di origin, Keluar origin, Menuju tujuan, Tiba di tujuan]
+          // Ditambah step "Selesai" di akhir
+          Builder(builder: (context) {
+            // Bangun daftar virtual step
+            final segmentCount = (_allSellers.length - 1).clamp(1, 99);
+            final List<_TimelineStep> steps = [];
 
-            String stageTitle = stage.title;
-            if (stage == TripStage.enRoute) {
-              stageTitle =
-                  'Sedang Menuju ke ${_currentSeller?.name ?? _currentDestinationType}';
-            } else if (stage == TripStage.arrived) {
-              stageTitle =
-                  'Tiba di ${_currentSeller?.name ?? _currentDestinationType}';
-            } else if (stage == TripStage.leavingWarehouse) {
-              stageTitle = 'Keluar $_previousLocationType';
+            for (int seg = 0; seg < segmentCount; seg++) {
+              final origin = _allSellers[seg];
+              final destination = _allSellers[seg + 1];
+
+              final originType = _getJenisLokasi(origin.jenisStop);
+              final destType = _getJenisLokasi(destination.jenisStop);
+
+              steps.add(_TimelineStep(
+                title: 'Bongkar Muat di ${origin.name}',
+                subtitle: 'Proses pengisian muatan di $originType',
+                icon: Icons.inventory_2_outlined,
+                segIndex: seg,
+                stageIndex: 0, // loadingGoods
+              ));
+              steps.add(_TimelineStep(
+                title: 'Keluar dari ${origin.name}',
+                subtitle: 'Truk bergerak meninggalkan area $originType',
+                icon: Icons.local_shipping_outlined,
+                segIndex: seg,
+                stageIndex: 1, // leavingWarehouse
+              ));
+              steps.add(_TimelineStep(
+                title: 'Menuju ${destination.name}',
+                subtitle: 'Sedang dalam perjalanan menuju $destType tujuan',
+                icon: Icons.navigation_outlined,
+                segIndex: seg,
+                stageIndex: 2, // enRoute
+              ));
+              steps.add(_TimelineStep(
+                title: 'Tiba di ${destination.name}',
+                subtitle: 'Truk telah sampai di $destType',
+                icon: Icons.location_on_outlined,
+                segIndex: seg,
+                stageIndex: 3, // arrived
+              ));
             }
 
-            return IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Column(
+            // Step terakhir: Selesai
+            steps.add(_TimelineStep(
+              title: 'Selesai',
+              subtitle: 'Seluruh rangkaian perjalanan ritase ini selesai',
+              icon: Icons.check_circle_outline,
+              segIndex: segmentCount,
+              stageIndex: -1, // completed
+            ));
+
+            // Hitung global step index saat ini
+            // Setiap segmen punya 4 steps (index 0-3)
+            // Global current step = completedStops.length * 4 + currentStage.index
+            final int currentGlobal;
+            if (_currentStage == TripStage.completed) {
+              currentGlobal = steps.length - 1; // step "Selesai"
+            } else {
+              currentGlobal = _completedStops.length * 4 + _currentStage.index;
+            }
+
+            return Column(
+              children: steps.asMap().entries.map((entry) {
+                final globalIdx = entry.key;
+                final step = entry.value;
+                final isCurrent = globalIdx == currentGlobal;
+                final isPassed = globalIdx < currentGlobal;
+                final isLast = globalIdx == steps.length - 1;
+
+                // Ambil durasi dari stage jika sudah selesai (hanya untuk segmen aktif)
+                int? durationSec;
+                if (isPassed && step.segIndex == _completedStops.length && step.stageIndex >= 0) {
+                  durationSec = _currentStageDurations[TripStage.values[step.stageIndex]];
+                } else if (isPassed && step.segIndex < _completedStops.length && step.stageIndex >= 0) {
+                  durationSec = _completedStops[step.segIndex].stageDurations[TripStage.values[step.stageIndex]];
+                }
+
+                return IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isPassed
-                              ? Colors.green
-                              : isCurrent
-                              ? const Color(0xFF0D47A1)
-                              : Colors.grey.shade200,
-                          border: Border.all(
-                            color: isCurrent
-                                ? const Color(0xFFFF8F00)
-                                : Colors.transparent,
-                            width: 2,
-                          ),
-                        ),
-                        child: Icon(
-                          isPassed ? Icons.check : stage.icon,
-                          color: (isPassed || isCurrent)
-                              ? Colors.white
-                              : Colors.grey,
-                          size: 16,
-                        ),
-                      ),
-                      if (!isLast)
-                        Expanded(
-                          child: Container(
-                            width: 2,
-                            color: isPassed
-                                ? Colors.green
-                                : Colors.grey.shade300,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 20.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      Column(
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  stageTitle,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: isCurrent
-                                        ? FontWeight.bold
-                                        : FontWeight.w600,
-                                    color: isPassed
-                                        ? Colors.green[800]
-                                        : isCurrent
-                                        ? const Color(0xFF0D47A1)
-                                        : Colors.grey[700],
-                                  ),
-                                ),
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isPassed
+                                  ? Colors.green
+                                  : isCurrent
+                                  ? const Color(0xFF0D47A1)
+                                  : Colors.grey.shade200,
+                              border: Border.all(
+                                color: isCurrent
+                                    ? const Color(0xFFFF8F00)
+                                    : Colors.transparent,
+                                width: 2,
                               ),
-                              if (durationInSec != null) ...[
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.green[50],
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.timer,
-                                        size: 11,
-                                        color: Colors.green,
-                                      ),
-                                      const SizedBox(width: 3),
-                                      Text(
-                                        _formatReadableDuration(durationInSec),
-                                        style: const TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.green,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
+                            ),
+                            child: Icon(
+                              isPassed ? Icons.check : step.icon,
+                              color: (isPassed || isCurrent)
+                                  ? Colors.white
+                                  : Colors.grey,
+                              size: 16,
+                            ),
                           ),
-                          const SizedBox(height: 2),
-                          Builder(
-                            builder: (context) {
-                              String stageSubtitle = stage.subtitle.replaceAll(
-                                '[Nama Seller]',
-                                sellerName,
-                              );
-                              if (stage == TripStage.leavingWarehouse) {
-                                stageSubtitle =
-                                    'Truk bergerak meninggalkan area $_previousLocationType';
-                              }
-                              return Text(
-                                stageSubtitle,
+                          if (!isLast)
+                            Expanded(
+                              child: Container(
+                                width: 2,
+                                color: isPassed
+                                    ? Colors.green
+                                    : Colors.grey.shade300,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 20.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      step.title,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: isCurrent
+                                            ? FontWeight.bold
+                                            : FontWeight.w600,
+                                        color: isPassed
+                                            ? Colors.green[800]
+                                            : isCurrent
+                                            ? const Color(0xFF0D47A1)
+                                            : Colors.grey[700],
+                                      ),
+                                    ),
+                                  ),
+                                  if (durationSec != null) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green[50],
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.timer,
+                                            size: 11,
+                                            color: Colors.green,
+                                          ),
+                                          const SizedBox(width: 3),
+                                          Text(
+                                            _formatReadableDuration(durationSec),
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.green,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                step.subtitle,
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: isCurrent
                                       ? Colors.black87
                                       : Colors.grey[600],
                                 ),
-                              );
-                            },
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              }).toList(),
             );
           }),
 
@@ -2091,25 +2218,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ] else ...[
+            // Semua stop dalam ritase ini sudah selesai otomatis
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: Colors.green[50],
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.green),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green.shade400),
               ),
-              child: Row(
+              child: Column(
                 children: [
-                  const Icon(Icons.check_circle, color: Colors.green),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Penjemputan di ${_currentSeller?.name} Selesai! ($_currentActualAwb AWB, $_currentActualKoli Koli, $_currentActualEcer Ecer)',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green,
-                      ),
+                  const Icon(Icons.check_circle, color: Colors.green, size: 28),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Semua ${_completedStops.length} titik stop dalam ritase ini selesai!',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -2117,79 +2245,32 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 14),
 
-            // Tombol Opsi Multi-Seller
-            if (hasMoreSellers) ...[
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    if (_availableSellers.isNotEmpty) {
-                      _startTripDirectly(_availableSellers.first);
-                    }
-                  },
-                  icon: const Icon(Icons.add_location_alt_outlined),
-                  label: const Text(
-                    'Lanjut ke ritase Berikutnya',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0D47A1),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ] else if (_idRitase == 0) ...[
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _currentSeller = null;
-                      _currentStage = TripStage.enRoute;
-                      _activeStageSeconds = 0;
-                      _currentStageDurations.clear();
-                      _currentActualAwb = 0;
-                      _currentActualKoli = 0;
-                      _currentActualEcer = 0;
-                      _awbInputController.text = '0';
-                      _koliInputController.text = '0';
-                      _ecerInputController.text = '0';
-                    });
-                    _startTimer();
-                    _sendInstantTracking();
-                  },
-                  icon: const Icon(Icons.explore_outlined),
-                  label: const Text(
-                    'Lanjut Cari Lokasi Baru (Bebas)',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0D47A1),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-
-            OutlinedButton(
+            ElevatedButton.icon(
               onPressed: _finishEntireRoute,
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 44),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+              icon: Icon(
+                _isLastRitase
+                    ? Icons.check_circle_outline
+                    : Icons.arrow_forward,
+              ),
+              label: Text(
+                _isLastRitase
+                    ? 'Perjalanan Sudah Selesai'
+                    : 'Selesaikan Ritase & Lanjut Rute Berikutnya',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
-              child: Text(_isLastRitase ? 'Selesaikan Seluruh Ritase Hari Ini' : 'Selesaikan Ritase & Lanjut Rute Berikutnya'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isLastRitase
+                    ? Colors.green.shade700
+                    : const Color(0xFF0D47A1),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
             ),
           ],
         ],
@@ -2525,22 +2606,49 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Terima kasih! Seluruh seller dalam rute penugasan telah berhasil dikunjungi.',
+            'Terima kasih untuk pengirimannya hari ini, anda sudah bekerja dengan baik!',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: Colors.grey[600]),
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
-            onPressed: _resetSimulation,
-            icon: const Icon(Icons.home),
+            onPressed: () async {
+              _stopTimer();
+              setState(() {
+                _isLoadingActiveRitase = true;
+              });
+              await ApiClient.resetDriverTestRitase(_idDriver);
+              setState(() {
+                _isTripStarted = false;
+                _isEntireRouteCompleted = false;
+                _completedStops.clear();
+                _currentStage = TripStage.loadingGoods;
+                _activeStageSeconds = 0;
+                _currentStageDurations.clear();
+              });
+              await _fetchActiveRitase();
+            },
+            icon: const Icon(Icons.replay),
             label: const Text(
-              'Kembali ke Beranda Utama',
+              'Mulai Ulang Perjalanan (Testing)',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green[700],
+              backgroundColor: const Color(0xFFFF8F00),
               foregroundColor: Colors.white,
               minimumSize: const Size(double.infinity, 48),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _resetSimulation,
+            icon: const Icon(Icons.home),
+            label: const Text('Kembali ke Beranda Utama'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 44),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),

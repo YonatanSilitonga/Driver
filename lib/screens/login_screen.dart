@@ -39,14 +39,12 @@ class _LoginScreenState extends State<LoginScreen> {
       try {
         final user = await AuthService.login(usernameOrEmail, password);
         if (mounted) {
-          setState(() => _isLoading = false);
           if (user != null) {
-            // Set identitas tracking dari akun yang login (bukan hardcode AWALUDIN)
+            // Set identitas tracking dari akun yang login
             try {
               final cfg = await ApiClient.loadDriverConfig();
               final idDriver = _toInt(user['id_driver'], fallback: cfg['id_driver'] ?? 0);
               var idKendaraan = cfg['id_kendaraan'] ?? 2;
-              // Coba ambil kendaraan dari ritase driver yang login (scoped oleh backend)
               try {
                 final res = await ApiClient.dio.get('/armada/ritase');
                 final body = res.data;
@@ -66,28 +64,58 @@ class _LoginScreenState extends State<LoginScreen> {
                 idRitase: 0,
                 driverName: driverName,
               );
-              // ignore: avoid_print
-              print('✅ Tracking identity -> id_driver=$idDriver, id_kendaraan=$idKendaraan, name=$driverName');
             } catch (e) {
               // ignore: avoid_print
               print('⚠️ Gagal set config tracking: $e');
             }
-            // Background tracking: mulai service setelah login (layar mati tetap Online).
+
+            // Background tracking
             try {
               await startBackgroundTracking();
             } catch (_) {}
+
+            if (!mounted) return;
+            setState(() => _isLoading = false);
+
+            final nameToShow = user['username'] ?? user['nama'] ?? user['name'] ?? 'Driver';
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(
-                  'Selamat datang, ${user['username'] ?? 'Driver'}!',
+                content: Row(
+                  children: [
+                    const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Selamat datang, $nameToShow',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
                 ),
-                backgroundColor: Colors.green,
+                backgroundColor: const Color(0xFF0D47A1),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                margin: const EdgeInsets.all(16),
+                duration: const Duration(seconds: 2),
               ),
             );
+
             Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const MainLayout()),
+              PageRouteBuilder(
+                transitionDuration: const Duration(milliseconds: 400),
+                pageBuilder: (_, __, ___) => const MainLayout(),
+                transitionsBuilder: (_, animation, __, child) {
+                  return FadeTransition(opacity: animation, child: child);
+                },
+              ),
               (route) => false,
             );
+          } else {
+            setState(() => _isLoading = false);
           }
         }
       } catch (e) {
@@ -100,8 +128,18 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } else {
       // Masuk mode trial jika kosong
+      setState(() => _isLoading = true);
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      setState(() => _isLoading = false);
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const MainLayout()),
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 400),
+          pageBuilder: (_, __, ___) => const MainLayout(),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
         (route) => false,
       );
     }
@@ -345,6 +383,55 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
+
+          // ==== Simple Clean Loading Overlay ====
+          if (_isLoading)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.45),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 28,
+                      vertical: 24,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            color: Color(0xFF0D47A1),
+                            strokeWidth: 3,
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        Text(
+                          'Memuat...',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF1E293B),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
         ),
       ),

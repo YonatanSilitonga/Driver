@@ -227,6 +227,19 @@ class ApiClient {
     }
   }
 
+  static Future<bool> resetDriverTestRitase(int idDriver) async {
+    try {
+      final res = await dio.post(
+        '/driver/reset-test-ritase',
+        data: {'id_driver': idDriver},
+      );
+      return res.statusCode == 200;
+    } catch (e) {
+      print('❌ [RESET TEST RITASE] Gagal: $e');
+      return false;
+    }
+  }
+
   // Ambil daftar kendaraan dari API Backend
   static Future<List<dynamic>> fetchVehicles() async {
     try {
