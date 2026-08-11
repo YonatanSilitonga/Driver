@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';      // File AuthService
+import '../services/auth_service.dart';
 import '../services/api_client.dart';
-import 'main_layout.dart';
 import '../services/background_tracking.dart';
+import 'main_layout.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({Key? key}) : super(key: key);
+  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -22,17 +22,12 @@ class _LoginScreenState extends State<LoginScreen> {
   final Color primaryBlue = const Color(0xFF115C93);
   final Color primaryOrange = const Color(0xFFF27D26);
 
-  // --- 3. Helper Method _toInt (jika sebelumnya belum ada) ---
+  // --- 3. Helper Method _toInt ---
   int _toInt(dynamic value, {int fallback = 0}) {
     if (value == null) return fallback;
     if (value is int) return value;
     return int.tryParse(value.toString()) ?? fallback;
   }
-  // Warna sesuai mockup
-  static const Color _navy = Color(0xFF1E293B);
-  static const Color _blueBtn = Color(0xFF2F5CDB);
-  static const Color _orange = Color(0xFFF5A623);
-  static const Color _blueWave = Color(0xFF2B4FD1);
 
   @override
   void dispose() {
@@ -168,9 +163,12 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Opacity(
               opacity: 0.55,
               child: Image.asset(
-                'assets/images/map_bg.png', // ganti dengan gambar pattern peta Anda
+                'assets/images/map_bg.png',
                 fit: BoxFit.fitWidth,
                 alignment: Alignment.topCenter,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  color: const Color(0xFFF8F9FA),
+                ),
               ),
             ),
           ),
@@ -184,13 +182,16 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: [
-                    
-
                     Image.asset(
-                        'assets/images/logo_mustgo.png', // ganti dengan file logo PNG Anda
-                        height: 120,
-                        width: 120,
+                      'assets/images/logo_mustgo.png',
+                      height: 120,
+                      width: 120,
+                      errorBuilder: (context, error, stackTrace) => const Icon(
+                        Icons.local_shipping_rounded,
+                        size: 80,
+                        color: Color(0xFF0D47A1),
                       ),
+                    ),
 
                     const SizedBox(height: 32),
 
@@ -285,9 +286,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             width: double.infinity,
                             height: 52,
                             child: ElevatedButton(
-                              onPressed: () {
-                                // Aksi saat login diklik
-                              },
+                              onPressed: _isLoading ? null : _handleLogin,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: primaryOrange,
                                 elevation: 0,
@@ -309,7 +308,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
 
-                    const SizedBox(height: 80), // Ruang untuk wave bawah
+                    const SizedBox(height: 80),
                   ],
                 ),
               ),
@@ -323,14 +322,15 @@ class _LoginScreenState extends State<LoginScreen> {
             right: 0,
             child: IgnorePointer(
               child: Image.asset(
-                'assets/images/bottom_waves.png', // ganti dengan file eksport wave dari Figma
+                'assets/images/bottom_waves.png',
                 width: MediaQuery.of(context).size.width,
                 fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
               ),
             ),
           ),
 
-          // ==== Simple Clean Loading Overlay ====
+          // 4. SIMPLE CLEAN LOADING OVERLAY
           if (_isLoading)
             Positioned.fill(
               child: Container(
@@ -380,6 +380,6 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
         ],
       ),
-    );  
+    );
   }
 }

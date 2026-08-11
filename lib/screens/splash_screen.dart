@@ -183,12 +183,13 @@ class _SplashScreenState extends State<SplashScreen>
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(50),
                           child: Image.asset(
-                            'assets/images/logo.png',
-                            width: 80,
-                            height: 80,
+                            'assets/images/logo_mustgo.png',
+                            width: 90,
+                            height: 90,
+                            fit: BoxFit.contain,
                             errorBuilder: (context, error, stackTrace) {
                               return const Icon(
-                                Icons.hub_rounded,
+                                Icons.local_shipping_rounded,
                                 size: 80,
                                 color: Color(0xFF0D47A1),
                               );
