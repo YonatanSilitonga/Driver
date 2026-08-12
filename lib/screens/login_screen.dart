@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/api_client.dart';
 import '../services/background_tracking.dart';
-import 'main_layout.dart';
+import 'home_screen.dart';
+import 'forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -40,114 +41,113 @@ class _LoginScreenState extends State<LoginScreen> {
     final usernameOrEmail = _usernameController.text.trim();
     final password = _passwordController.text.trim();
 
-    if (usernameOrEmail.isNotEmpty && password.isNotEmpty) {
-      setState(() => _isLoading = true);
-      try {
-        final user = await AuthService.login(usernameOrEmail, password);
-        if (mounted) {
-          if (user != null) {
-            // Set identitas tracking dari akun yang login
+    // Validasi wajib â€” tanpa input tidak boleh masuk (no trial mode).
+    if (usernameOrEmail.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Username dan password wajib diisi.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final user = await AuthService.login(usernameOrEmail, password);
+      if (mounted) {
+        if (user != null) {
+          // Set identitas tracking dari akun yang login
+          try {
+            final cfg = await ApiClient.loadDriverConfig();
+            final idDriver = _toInt(user['id_driver'], fallback: cfg['id_driver'] ?? 0);
+            var idKendaraan = cfg['id_kendaraan'] ?? 2;
             try {
-              final cfg = await ApiClient.loadDriverConfig();
-              final idDriver = _toInt(user['id_driver'], fallback: cfg['id_driver'] ?? 0);
-              var idKendaraan = cfg['id_kendaraan'] ?? 2;
-              try {
-                final res = await ApiClient.dio.get('/armada/ritase');
-                final body = res.data;
-                final data = (body is Map && body['data'] is List)
-                    ? body['data'] as List
-                    : const <dynamic>[];
-                if (data.isNotEmpty && data.first is Map) {
-                  final first = data.first as Map;
-                  final kid = _toInt(first['id_kendaraan']);
-                  if (kid > 0) idKendaraan = kid;
-                }
-              } catch (_) {/* fallback ke config */}
-              final driverName = (user['nama'] ?? user['name'] ?? user['username'] ?? 'AWALUDIN').toString();
-              await ApiClient.saveDriverConfig(
-                idDriver: idDriver,
-                idKendaraan: idKendaraan,
-                idRitase: 0,
-                driverName: driverName,
-              );
-            } catch (e) {
-              // ignore: avoid_print
-              print('⚠️ Gagal set config tracking: $e');
-            }
-
-            // Background tracking
-            try {
-              await startBackgroundTracking();
-            } catch (_) {}
-
-            if (!mounted) return;
-            setState(() => _isLoading = false);
-
-            final nameToShow = user['username'] ?? user['nama'] ?? user['name'] ?? 'Driver';
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Row(
-                  children: [
-                    const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Selamat datang, $nameToShow',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-                backgroundColor: const Color(0xFF0D47A1),
-                behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                margin: const EdgeInsets.all(16),
-                duration: const Duration(seconds: 2),
-              ),
+              final res = await ApiClient.dio.get('/armada/ritase');
+              final body = res.data;
+              final data = (body is Map && body['data'] is List)
+                  ? body['data'] as List
+                  : const <dynamic>[];
+              if (data.isNotEmpty && data.first is Map) {
+                final first = data.first as Map;
+                final kid = _toInt(first['id_kendaraan']);
+                if (kid > 0) idKendaraan = kid;
+              }
+            } catch (_) {/* fallback ke config */}
+            final driverName = (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver').toString();
+            await ApiClient.saveDriverConfig(
+              idDriver: idDriver,
+              idKendaraan: idKendaraan,
+              idRitase: 0,
+              driverName: driverName,
             );
-
-            Navigator.of(context).pushAndRemoveUntil(
-              PageRouteBuilder(
-                transitionDuration: const Duration(milliseconds: 400),
-                pageBuilder: (_, __, ___) => const MainLayout(),
-                transitionsBuilder: (_, animation, __, child) {
-                  return FadeTransition(opacity: animation, child: child);
-                },
-              ),
-              (route) => false,
-            );
-          } else {
-            setState(() => _isLoading = false);
+          } catch (e) {
+            // ignore: avoid_print
+            print('âš ï¸ Gagal set config tracking: $e');
           }
-        }
-      } catch (e) {
-        if (mounted) {
+
+          // Background tracking
+          try {
+            await startBackgroundTracking();
+          } catch (_) {}
+
+          if (!mounted) return;
+          setState(() => _isLoading = false);
+
+          final nameToShow = user['username'] ?? user['nama'] ?? user['name'] ?? 'Driver';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Selamat datang, $nameToShow',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFF0D47A1),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.all(16),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+
+          Navigator.of(context).pushAndRemoveUntil(
+            PageRouteBuilder(
+              transitionDuration: const Duration(milliseconds: 400),
+              pageBuilder: (_, _, _) => const HomeScreen(),
+              transitionsBuilder: (_, animation, _, child) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+            ),
+            (route) => false,
+          );
+        } else {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+            const SnackBar(
+              content: Text('Login gagal. Periksa kembali username/password.'),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       }
-    } else {
-      // Masuk mode trial jika kosong
-      setState(() => _isLoading = true);
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (!mounted) return;
-      setState(() => _isLoading = false);
-      Navigator.of(context).pushAndRemoveUntil(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 400),
-          pageBuilder: (_, __, ___) => const MainLayout(),
-          transitionsBuilder: (_, animation, __, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-        ),
-        (route) => false,
-      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -300,6 +300,27 @@ class _LoginScreenState extends State<LoginScreen> {
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // Lupa password (tanpa OTP â€” verifikasi username + no_hp)
+                          Align(
+                            alignment: Alignment.center,
+                            child: TextButton(
+                              onPressed: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const ForgotPasswordScreen(),
+                                ),
+                              ),
+                              child: const Text(
+                                'Lupa password?',
+                                style: TextStyle(
+                                  color: Color(0xFF115C93),
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),

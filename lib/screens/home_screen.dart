@@ -1,12 +1,17 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
 import 'login_screen.dart';
+import '../widgets/app_colors.dart';
+import '../widgets/vehicle_card.dart';
+import '../widgets/origin_card.dart';
 
-// Model data dummy Seller
+// ── Models (unchanged) ──
+
 class SellerDummy {
   final String id;
   final String name;
@@ -15,6 +20,8 @@ class SellerDummy {
   final int estimatedAwb;
   final int totalKoli;
   final String jenisStop;
+  final double? latitude;
+  final double? longitude;
 
   const SellerDummy({
     required this.id,
@@ -24,10 +31,11 @@ class SellerDummy {
     required this.estimatedAwb,
     required this.totalKoli,
     this.jenisStop = 'seller',
+    this.latitude,
+    this.longitude,
   });
 }
 
-// Model data Riwayat Stop yang Sudah Selesai
 class CompletedStop {
   final SellerDummy seller;
   final int actualAwb;
@@ -46,13 +54,12 @@ class CompletedStop {
   });
 }
 
-// Helper class untuk step timeline dinamis
 class _TimelineStep {
   final String title;
   final String subtitle;
   final IconData icon;
-  final int segIndex;   // indeks segmen (0 = segmen pertama)
-  final int stageIndex; // 0=loading,1=leaving,2=enRoute,3=arrived,-1=completed
+  final int segIndex;
+  final int stageIndex;
 
   const _TimelineStep({
     required this.title,
@@ -63,7 +70,6 @@ class _TimelineStep {
   });
 }
 
-// Tahapan Status Perjalanan
 enum TripStage {
   loadingGoods(
     'Bongkar Muat Barang',
@@ -97,6 +103,8 @@ enum TripStage {
   const TripStage(this.title, this.subtitle, this.icon);
 }
 
+// ── State ──
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -106,7 +114,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<SellerDummy> _allSellers = [];
-  bool _isLoadingActiveRitase = false;
   bool _isLastRitase = false;
 
   String _getJenisLokasi(String? jenisStop) {
@@ -115,9 +122,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Seller';
   }
 
-  String get _currentDestinationType {
-    return _getJenisLokasi(_currentSeller?.jenisStop);
-  }
+  String get _currentDestinationType =>
+      _getJenisLokasi(_currentSeller?.jenisStop);
 
   String get _previousLocationType {
     if (_completedStops.isNotEmpty) {
@@ -126,12 +132,10 @@ class _HomeScreenState extends State<HomeScreen> {
     return 'Gudang';
   }
 
-  String? _activeRitaseKode;
-  String? _activeRitaseStatus;
   List<dynamic> _vehicles = [];
   String? _selectedVehiclePlat;
+  String? _selectedVehicleType;
 
-  // State Perjalanan Multi-Stop
   bool _isTripStarted = false;
   bool _isEntireRouteCompleted = false;
   SellerDummy? _currentSeller;
@@ -139,67 +143,55 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<CompletedStop> _completedStops = [];
 
-  // Controllers & State untuk Input AWB & Koli saat Bongkar Muat (Dimulai dari 0)
-  final TextEditingController _awbInputController = TextEditingController(
-    text: '0',
-  );
-  final TextEditingController _koliInputController = TextEditingController(
-    text: '0',
-  );
-  final TextEditingController _ecerInputController = TextEditingController(
-    text: '0',
-  );
+  final TextEditingController _awbInputController =
+      TextEditingController(text: '0');
+  final TextEditingController _koliInputController =
+      TextEditingController(text: '0');
+  final TextEditingController _ecerInputController =
+      TextEditingController(text: '0');
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
   int _currentActualEcer = 0;
 
-  // Timer & Real-time Location Tracking State
   Timer? _stopwatchTimer;
   int _activeStageSeconds = 0;
-  // ignore: unused_field
-  int _totalTripSeconds = 0;
   final Map<TripStage, int> _currentStageDurations = {};
 
-  // Dummy Live GPS Coordinates
   double _latitude = -6.2024;
   double _longitude = 106.6522;
   int _currentSpeedKmH = 0;
 
-  // Identitas tracking (dari konfigurasi, bukan hardcode)
   int _idDriver = 3;
   int _idKendaraan = 2;
   int _idRitase = 4;
   String _driverName = 'AWALUDIN';
 
   // ── Konstanta Smart GPS Tracking ──
-  static const int _gpsRefreshEveryTicks = 8; // baca GPS tiap 8 detik
-  static const int _movingSendSeconds = 8; // kirim tiap 8 detik saat bergerak
-  static const int _stationarySendSeconds =
-      180; // kirim tiap 3 menit saat berhenti
-  static const double _speedThresholdKmh = 5; // > 5 km/jam dianggap bergerak
-  static const double _moveThresholdDeg =
-      0.00005; // geser > ~5 m dianggap bergerak
+  static const int _gpsRefreshEveryTicks = 8;
+  static const int _movingSendSeconds = 8;
+  static const int _stationarySendSeconds = 60;
+  static const double _speedThresholdKmh = 5;
+  static const double _moveThresholdDeg = 0.00005;
 
-  // Counter throttling refresh GPS asli
   int _gpsTick = 0;
-
-  // Smart tracking state variables
   double? _lastSentLat;
   double? _lastSentLng;
   DateTime? _lastMovementTime;
   DateTime? _lastSentTime;
-  // Titik GPS sebelumnya (untuk fallback hitung kecepatan Haversine)
   DateTime? _prevFixTime;
   double? _prevLat;
   double? _prevLng;
+
+  // ── Animation ──
+  final List<bool> _cardVisible = [false, false, false];
+  final List<AnimationController?> _cardControllers = [];
 
   @override
   void initState() {
     super.initState();
     _loadConfig();
     _ensureLocationPermission();
-    // Telemetry: catat kapan app dibuka (backend users.last_open).
     ApiClient.markAppOpen();
   }
 
@@ -214,6 +206,19 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     await _fetchVehicles();
     await _fetchActiveRitase();
+    _animateCardsIn();
+  }
+
+  void _animateCardsIn() {
+    for (int i = 0; i < _cardVisible.length; i++) {
+      Future.delayed(Duration(milliseconds: 100 + i * 80), () {
+        if (mounted) {
+          setState(() {
+            _cardVisible[i] = true;
+          });
+        }
+      });
+    }
   }
 
   Future<void> _fetchVehicles() async {
@@ -225,9 +230,10 @@ class _HomeScreenState extends State<HomeScreen> {
         final current = _vehicles.firstWhere(
           (v) => v is Map && v['id'] == _idKendaraan,
         );
-        _selectedVehiclePlat = current is Map
-            ? current['plat']?.toString()
-            : null;
+        if (current is Map) {
+          _selectedVehiclePlat = current['plat']?.toString();
+          _selectedVehicleType = current['type']?.toString();
+        }
       } catch (_) {}
     });
   }
@@ -235,22 +241,19 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _fetchActiveRitase() async {
     if (_idKendaraan == 0) return;
     setState(() {
-      _isLoadingActiveRitase = true;
       _allSellers.clear();
       _isTripStarted = false;
     });
 
-    final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
+    final data =
+        await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
     if (!mounted) return;
 
     if (data != null && data['has_active_ritase'] == true) {
       final rawStops = data['stops'];
       final stops = rawStops is List ? rawStops : const <dynamic>[];
-      final filteredStops = stops.where((s) {
-        // Guard: s harus Map agar pengaksesan indeks String aman
-        if (s is! Map) return false;
-        return true;
-      });
+      final filteredStops =
+          stops.where((s) => s is Map).toList();
       final parsedSellers = filteredStops.map((item) {
         final m = item as Map;
         return SellerDummy(
@@ -258,22 +261,24 @@ class _HomeScreenState extends State<HomeScreen> {
           name: m['nama_lokasi']?.toString() ?? '',
           address: m['alamat']?.toString() ?? '',
           phone: m['no_hp']?.toString() ?? '-',
-          estimatedAwb: 20, // Dummy
-          totalKoli: 15, // Dummy
+          estimatedAwb: 20,
+          totalKoli: 15,
           jenisStop: m['jenis_stop']?.toString() ?? 'seller',
+          latitude: m['latitude'] != null
+              ? (m['latitude'] as num).toDouble()
+              : null,
+          longitude: m['longitude'] != null
+              ? (m['longitude'] as num).toDouble()
+              : null,
         );
       }).toList();
 
       setState(() {
         _idRitase = data['id_ritase'] ?? 0;
-        _activeRitaseKode = data['kode_ritase']?.toString();
-        _activeRitaseStatus = data['status']?.toString();
         _isLastRitase = data['is_last_ritase'] == true;
         _allSellers = parsedSellers;
-        _isLoadingActiveRitase = false;
       });
 
-      // Save to config
       await ApiClient.saveDriverConfig(
         idDriver: _idDriver,
         idKendaraan: _idKendaraan,
@@ -282,27 +287,21 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (data != null && data['all_completed'] == true) {
       setState(() {
         _idRitase = 0;
-        _activeRitaseKode = null;
-        _activeRitaseStatus = null;
-        _isLoadingActiveRitase = false;
         _isTripStarted = true;
         _isEntireRouteCompleted = true;
       });
     } else {
       setState(() {
         _idRitase = 0;
-        _activeRitaseKode = null;
-        _activeRitaseStatus = null;
-        _isLoadingActiveRitase = false;
       });
     }
   }
 
-  // Minta izin lokasi + ambil posisi pertama
   Future<void> _ensureLocationPermission() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
+      _showSnack(
+          'Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
       return;
     }
     var permission = await Geolocator.checkPermission();
@@ -314,13 +313,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (permission == LocationPermission.deniedForever) {
-      _showSnack('Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
+      _showSnack(
+          'Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
       return;
     }
     await _refreshLocation();
   }
 
-  // Ambil posisi GPS asli HP
   Future<void> _refreshLocation() async {
     try {
       final pos = await Geolocator.getCurrentPosition(
@@ -330,15 +329,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
       if (!mounted) return;
-
       final now = DateTime.now();
-
-      // Kecepatan utama: dari sensor GPS (m/s -> km/jam)
       final speedMs = pos.speed < 0 ? 0.0 : pos.speed;
       var speedKmh = (speedMs * 3.6).round();
 
-      // Fallback Haversine: kalau sensor tidak memberi kecepatan,
-      // hitung jarak antara 2 titik GPS terakhir / selisih waktu.
       if (speedKmh == 0 &&
           _prevLat != null &&
           _prevLng != null &&
@@ -350,9 +344,7 @@ class _HomeScreenState extends State<HomeScreen> {
           pos.longitude,
         );
         final dt = now.difference(_prevFixTime!).inSeconds;
-        if (dt > 0) {
-          speedKmh = ((dist / dt) * 3.6).round();
-        }
+        if (dt > 0) speedKmh = ((dist / dt) * 3.6).round();
       }
 
       setState(() {
@@ -361,19 +353,20 @@ class _HomeScreenState extends State<HomeScreen> {
         _currentSpeedKmH = speedKmh;
       });
 
-      // Simpan titik ini sebagai referensi untuk hitungan berikutnya
       _prevLat = pos.latitude;
       _prevLng = pos.longitude;
       _prevFixTime = now;
-    } catch (_) {
-      // Pertahankan koordinat terakhir jika GPS belum siap
-    }
+    } catch (_) {}
   }
 
   void _showSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
     );
   }
 
@@ -383,26 +376,26 @@ class _HomeScreenState extends State<HomeScreen> {
     _awbInputController.dispose();
     _koliInputController.dispose();
     _ecerInputController.dispose();
+    for (final c in _cardControllers) {
+      c?.dispose();
+    }
     super.dispose();
   }
 
   void _startTimer() {
     _stopwatchTimer?.cancel();
-    _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _stopwatchTimer =
+        Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
       setState(() {
         if (_isTripStarted && !_isEntireRouteCompleted) {
           _activeStageSeconds++;
-          _totalTripSeconds++;
 
-          // Refresh posisi GPS asli tiap 8 detik
           _gpsTick++;
           if (_gpsTick % _gpsRefreshEveryTicks == 0) {
             _refreshLocation();
           }
 
-          // Smart GPS Tracking upload logic
-          // Berjalan -> kirim tiap 8 detik | Berhenti -> kirim tiap 3 menit
           final now = DateTime.now();
           if (_lastSentTime == null ||
               _lastSentLat == null ||
@@ -411,24 +404,21 @@ class _HomeScreenState extends State<HomeScreen> {
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
             final lngDiff = (_longitude - _lastSentLng!).abs();
-            final moved =
-                _currentSpeedKmH > _speedThresholdKmh ||
-                (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
+            final moved = _currentSpeedKmH > _speedThresholdKmh ||
+                (latDiff > _moveThresholdDeg ||
+                    lngDiff > _moveThresholdDeg);
 
             if (moved) {
               _lastMovementTime = now;
-              final secondsSinceLastSent = now
-                  .difference(_lastSentTime!)
-                  .inSeconds;
-              if (secondsSinceLastSent >= _movingSendSeconds) {
+              final secSince =
+                  now.difference(_lastSentTime!).inSeconds;
+              if (secSince >= _movingSendSeconds) {
                 _sendInstantTracking(speed: _currentSpeedKmH);
               }
             } else {
-              // Berhenti: kirim heartbeat tiap 3 menit (hemat baterai)
-              final secondsSinceLastSent = now
-                  .difference(_lastSentTime!)
-                  .inSeconds;
-              if (secondsSinceLastSent >= _stationarySendSeconds) {
+              final secSince =
+                  now.difference(_lastSentTime!).inSeconds;
+              if (secSince >= _stationarySendSeconds) {
                 _lastSentLat = _latitude;
                 _lastSentLng = _longitude;
                 _lastSentTime = now;
@@ -450,9 +440,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void _stopTimer() {
-    _stopwatchTimer?.cancel();
-  }
+  void _stopTimer() => _stopwatchTimer?.cancel();
 
   void _resetSimulation() {
     _stopTimer();
@@ -462,7 +450,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentSeller = null;
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
-      _totalTripSeconds = 0;
       _currentStageDurations.clear();
       _completedStops.clear();
       _currentActualAwb = 0;
@@ -478,13 +465,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _fetchActiveRitase();
   }
 
-  List<SellerDummy> get _availableSellers {
-    final visitedIds = _completedStops.map((stop) => stop.seller.id).toSet();
-    return _allSellers
-        .where((seller) => !visitedIds.contains(seller.id))
-        .toList();
-  }
-
   void _startTripDirectly(SellerDummy seller) {
     setState(() {
       _currentSeller = seller;
@@ -492,7 +472,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
       _currentStageDurations.clear();
-
       _currentActualAwb = 0;
       _currentActualKoli = 0;
       _currentActualEcer = 0;
@@ -528,7 +507,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Mapping stage UI -> status backend (ritase_event)
   String _stageToStatusKey(TripStage stage) {
     switch (stage) {
       case TripStage.loadingGoods:
@@ -547,7 +525,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String get _currentStageTitle {
     final currLoc = _currentDestinationType;
     final prevLoc = _previousLocationType;
-
     switch (_currentStage) {
       case TripStage.loadingGoods:
         return 'Bongkar Muat Barang';
@@ -562,48 +539,12 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // ignore: unused_element
-  void _showSellerSelectionSheet() {
-    final available = _availableSellers;
-    if (available.isEmpty) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        SellerDummy? tempSelected = available.first;
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _startTripDirectly(tempSelected);
-                    },
-                    child: const Text('Lanjut'),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
   Future<void> _showVehicleSelection() async {
     await showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (BuildContext ctx) {
         return Container(
@@ -613,7 +554,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               const Text(
                 'Pilih Kendaraan Anda',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
               if (_vehicles.isEmpty)
@@ -627,26 +569,34 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: _vehicles.length,
                     itemBuilder: (context, index) {
                       final v = _vehicles[index];
-                      // Guard: elemen harus Map agar aman diindeks String
                       if (v is! Map) {
                         return const ListTile(title: Text('-'));
                       }
-                      final isSelected = _idKendaraan == v['id'];
+                      final isSelected =
+                          _idKendaraan == v['id'];
                       return ListTile(
                         leading: Icon(
                           Icons.local_shipping,
-                          color: isSelected ? Colors.blue : Colors.grey,
+                          color: isSelected
+                              ? AppColors.navy
+                              : Colors.grey,
                         ),
-                        title: Text(v['plat']?.toString() ?? '-'),
-                        subtitle: Text('${v['type']} - ${v['capacity_kg']}kg'),
+                        title: Text(
+                            v['plat']?.toString() ?? '-'),
+                        subtitle: Text(
+                            '${v['type']} - ${v['capacity_kg']}kg'),
                         trailing: isSelected
-                            ? const Icon(Icons.check_circle, color: Colors.blue)
+                            ? const Icon(Icons.check_circle,
+                                color: AppColors.navy)
                             : null,
                         onTap: () async {
                           Navigator.pop(ctx);
                           setState(() {
                             _idKendaraan = _toInt(v['id']);
-                            _selectedVehiclePlat = v['plat']?.toString();
+                            _selectedVehiclePlat =
+                                v['plat']?.toString();
+                            _selectedVehicleType =
+                                v['type']?.toString();
                           });
                           await ApiClient.saveDriverConfig(
                             idDriver: _idDriver,
@@ -666,46 +616,210 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _showChangePasswordDialog() {
+    final oldCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    bool loading = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            title: const Text(
+              'Ganti Password',
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: oldCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Password Lama',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: newCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Password Baru',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: confirmCtrl,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Konfirmasi Password Baru',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: loading
+                    ? null
+                    : () => Navigator.pop(dialogCtx),
+                child: const Text('Batal',
+                    style: TextStyle(
+                        color: Colors.grey,
+                        fontWeight: FontWeight.bold)),
+              ),
+              ElevatedButton(
+                onPressed: loading
+                    ? null
+                    : () async {
+                        final old = oldCtrl.text.trim();
+                        final newP = newCtrl.text;
+                        final conf = confirmCtrl.text;
+                        String? err;
+                        if (old.isEmpty ||
+                            newP.isEmpty) {
+                          err = 'Semua field wajib diisi.';
+                        } else if (newP.length < 6) {
+                          err =
+                              'Password baru minimal 6 karakter.';
+                        } else if (newP != conf) {
+                          err =
+                              'Konfirmasi password tidak sama.';
+                        }
+                        if (err != null) {
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(
+                                  content: Text(err),
+                                  backgroundColor:
+                                      Colors.red));
+                          return;
+                        }
+                        setDialogState(
+                            () => loading = true);
+                        try {
+                          await ApiClient.changePassword(
+                            oldPassword: old,
+                            newPassword: newP,
+                          );
+                          if (!dialogCtx.mounted) return;
+                          Navigator.pop(dialogCtx);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  'Password berhasil diubah. Silakan login ulang.'),
+                              backgroundColor:
+                                  AppColors.navy,
+                            ),
+                          );
+                          await _forceRelogin();
+                        } catch (e) {
+                          if (!dialogCtx.mounted) return;
+                          setDialogState(
+                              () => loading = false);
+                          ScaffoldMessenger.of(dialogCtx)
+                              .showSnackBar(SnackBar(
+                                  content:
+                                      Text(e.toString()),
+                                  backgroundColor:
+                                      Colors.red));
+                        }
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.navy,
+                  foregroundColor: Colors.white,
+                ),
+                child: loading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Simpan',
+                        style: TextStyle(
+                            fontWeight:
+                                FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    ).then((_) {
+      oldCtrl.dispose();
+      newCtrl.dispose();
+      confirmCtrl.dispose();
+    });
+  }
+
+  Future<void> _forceRelogin() async {
+    await AuthService.logout();
+    try {
+      await stopBackgroundTracking();
+    } catch (_) {}
+    try {
+      await ApiClient.clearDriverConfig();
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
+
   Future<void> _confirmLogout() async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogCtx) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+              borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
-              Icon(Icons.logout_rounded, color: Colors.redAccent),
+              Icon(Icons.logout_rounded,
+                  color: AppColors.error),
               SizedBox(width: 8),
-              Text(
-                'Konfirmasi Logout',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
+              Text('Konfirmasi Logout',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
             ],
           ),
-          content: const Text('Apakah Anda yakin ingin keluar dari akun ini?'),
+          content: const Text(
+              'Apakah Anda yakin ingin keluar dari akun ini?'),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(dialogCtx, false),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              onPressed: () =>
+                  Navigator.pop(dialogCtx, false),
+              child: const Text('Batal',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold)),
             ),
             ElevatedButton(
-              onPressed: () => Navigator.pop(dialogCtx, true),
+              onPressed: () =>
+                  Navigator.pop(dialogCtx, true),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+                backgroundColor: AppColors.error,
                 foregroundColor: Colors.white,
               ),
-              child: const Text(
-                'Keluar',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: const Text('Keluar',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -714,9 +828,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (confirm == true && mounted) {
       await AuthService.logout();
-      // Matikan background tracking + bersihkan session online di backend.
       try {
         await stopBackgroundTracking();
+      } catch (_) {}
+      try {
+        await ApiClient.clearDriverConfig();
       } catch (_) {}
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
@@ -727,40 +843,34 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _confirmAndNextStage() {
-    // Validasi inputKoli <= 0 dihapus agar input menjadi opsional
-
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+              borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
-              Icon(
-                Icons.help_outline_rounded,
-                color: Color(0xFFFF8F00),
-                size: 26,
-              ),
+              Icon(Icons.help_outline_rounded,
+                  color: AppColors.orange, size: 26),
               SizedBox(width: 8),
-              Text(
-                'Konfirmasi Status',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
+              Text('Konfirmasi Status',
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold)),
             ],
           ),
           content: Text.rich(
             TextSpan(
-              text: 'Apakah Anda yakin ingin memperbarui status ke:\n\n',
-              style: const TextStyle(fontSize: 14, color: Colors.black87),
+              text: 'Status ke:\n\n',
+              style: const TextStyle(
+                  fontSize: 14, color: Colors.black87),
               children: [
                 TextSpan(
                   text: _getNextStageButtonLabel(),
                   style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0D47A1),
-                  ),
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.navy),
                 ),
                 const TextSpan(text: '?'),
               ],
@@ -768,14 +878,12 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(),
+              child: const Text('Batal',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -783,16 +891,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 _nextStage();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF8F00),
+                backgroundColor: AppColors.orange,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: const Text(
-                'Ya, Lanjutkan',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: const Text('Ya, Lanjutkan',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -802,21 +909,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
-      final inputKoli =
-          int.tryParse(_koliInputController.text.trim()) ?? _currentActualKoli;
-      final inputEcer =
-          int.tryParse(_ecerInputController.text.trim()) ?? _currentActualEcer;
+      final inputKoli = int.tryParse(
+              _koliInputController.text.trim()) ??
+          _currentActualKoli;
+      final inputEcer = int.tryParse(
+              _ecerInputController.text.trim()) ??
+          _currentActualEcer;
       _currentActualKoli = inputKoli;
       _currentActualEcer = inputEcer;
     }
 
-    // Catat stage yang sedang berakhir (untuk riwayat status backend)
     final finishedStage = _currentStage;
     final finishedDuration =
-        _currentStageDurations[finishedStage] ?? _activeStageSeconds;
+        _currentStageDurations[finishedStage] ??
+            _activeStageSeconds;
 
     setState(() {
-      _currentStageDurations[_currentStage] = _activeStageSeconds;
+      _currentStageDurations[_currentStage] =
+          _activeStageSeconds;
       _activeStageSeconds = 0;
 
       switch (_currentStage) {
@@ -830,33 +940,24 @@ class _HomeScreenState extends State<HomeScreen> {
           _currentStage = TripStage.arrived;
           break;
         case TripStage.arrived:
-          // Catat segmen ini ke completedStops (yang di-save adalah ORIGIN stop, bukan destination)
           if (_currentSeller != null) {
-            final stopTotalDuration = _currentStageDurations.values.fold(
-              0,
-              (sum, dur) => sum + dur,
-            );
-            _completedStops.add(
-              CompletedStop(
-                seller: _currentSeller!,
-                actualAwb: _currentActualAwb,
-                actualKoli: _currentActualKoli,
-                actualEcer: _currentActualEcer,
-                totalDurationSeconds: stopTotalDuration,
-                stageDurations: Map.from(_currentStageDurations),
-              ),
-            );
+            final stopTotalDuration =
+                _currentStageDurations.values
+                    .fold(0, (sum, dur) => sum + dur);
+            _completedStops.add(CompletedStop(
+              seller: _currentSeller!,
+              actualAwb: _currentActualAwb,
+              actualKoli: _currentActualKoli,
+              actualEcer: _currentActualEcer,
+              totalDurationSeconds: stopTotalDuration,
+              stageDurations:
+                  Map.from(_currentStageDurations),
+            ));
           }
-
-          // Cek apakah ada segmen berikutnya:
-          // _currentSeller saat ini adalah ORIGIN dari segmen (allSellers[i])
-          // Tujuan dari segmen ini adalah allSellers[i+1]
-          // Ada segmen berikutnya hanya jika allSellers[i+2] ada (ada origin berikutnya)
-          // Yaitu: _completedStops.length < allSellers.length - 1
-          final nextOriginIndex = _completedStops.length; // index SETELAH add
+          final nextOriginIndex = _completedStops.length;
           if (nextOriginIndex < _allSellers.length - 1) {
-            // Masih ada origin berikutnya → pindah ke segmen/origin berikutnya
-            _currentSeller = _allSellers[nextOriginIndex];
+            _currentSeller =
+                _allSellers[nextOriginIndex];
             _currentStage = TripStage.loadingGoods;
             _currentStageDurations.clear();
             _currentActualAwb = 0;
@@ -866,7 +967,6 @@ class _HomeScreenState extends State<HomeScreen> {
             _koliInputController.text = '0';
             _ecerInputController.text = '0';
           } else {
-            // Sudah tiba di tujuan akhir → ritase selesai
             _currentStage = TripStage.completed;
           }
           break;
@@ -875,7 +975,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    // Simpan riwayat status + durasi ke backend (ritase_event)
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
       status: _stageToStatusKey(finishedStage),
@@ -886,27 +985,22 @@ class _HomeScreenState extends State<HomeScreen> {
       durasiDetik: finishedDuration,
     );
 
-    _sendInstantTracking(durasiDetik: finishedDuration, stage: finishedStage);
+    _sendInstantTracking(
+        durasiDetik: finishedDuration, stage: finishedStage);
   }
 
   Future<void> _finishEntireRoute() async {
     final wasLast = _isLastRitase;
     _stopTimer();
-    setState(() {
-      _isLoadingActiveRitase = true;
-    });
 
-    // Call backend to finish Ritase
-    final success = await ApiClient.finishRitase(_idRitase);
+    final success =
+        await ApiClient.finishRitase(_idRitase);
     if (!success) {
-      _showSnack('Gagal menyelesaikan ritase di server');
-      setState(() {
-        _isLoadingActiveRitase = false;
-      });
+      _showSnack(
+          'Gagal menyelesaikan ritase di server');
       return;
     }
 
-    // Reset current trip state
     setState(() {
       _isTripStarted = false;
       _completedStops.clear();
@@ -915,7 +1009,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentStageDurations.clear();
     });
 
-    // Fetch next ritase
     await _fetchActiveRitase();
 
     if (_idRitase != 0 && !wasLast) {
@@ -932,157 +1025,23 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _isEntireRouteCompleted = true;
       });
-      _showSnack('Seluruh jadwal hari ini telah selesai!');
+      _showSnack(
+          'Seluruh jadwal hari ini telah selesai!');
     }
   }
 
   String _formatDuration(int seconds) {
-    final minutes = seconds ~/ 60;
-    final remainingSeconds = seconds % 60;
-    final minutesStr = minutes.toString().padLeft(2, '0');
-    final secondsStr = remainingSeconds.toString().padLeft(2, '0');
-    return '$minutesStr:$secondsStr';
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
   String _formatReadableDuration(int seconds) {
     if (seconds < 60) return '$seconds dtk';
-    final minutes = seconds ~/ 60;
-    final remainingSeconds = seconds % 60;
-    if (remainingSeconds == 0) return '$minutes mnt';
-    return '$minutes mnt $remainingSeconds dtk';
-  }
-
-  Future<void> _startFreeTrip() async {
-    setState(() {
-      _isLoadingActiveRitase = true;
-    });
-    final res = await ApiClient.startFreeTrip(_idDriver, _idKendaraan);
-    if (res != null) {
-      await _fetchActiveRitase();
-      setState(() {
-        _isTripStarted = true;
-      });
-      _startTimer();
-      _sendInstantTracking();
-    } else {
-      setState(() {
-        _isLoadingActiveRitase = false;
-      });
-      _showSnack('Gagal memulai perjalanan bebas');
-    }
-  }
-
-  Future<void> _showAddStopModal() async {
-    final rawSellers = await ApiClient.fetchSellers();
-    if (rawSellers.isEmpty) {
-      _showSnack('Tidak ada data seller tersedia');
-      return;
-    }
-
-    final Map<int, Map<String, dynamic>> uniqueSellers = {};
-    for (var s in rawSellers) {
-      if (s is Map) {
-        final id = int.tryParse(s['id_seller']?.toString() ?? '');
-        final name =
-            (s['nama_seller'] ?? s['name'] ?? s['nama'] ?? 'Seller #$id')
-                .toString();
-        if (id != null) {
-          uniqueSellers[id] = {'id_seller': id, 'nama_seller': name};
-        }
-      }
-    }
-
-    final sellers = uniqueSellers.values.toList();
-    if (sellers.isEmpty) {
-      _showSnack('Tidak ada data seller valid');
-      return;
-    }
-
-    int? selectedSellerId = sellers.first['id_seller'] as int?;
-
-    if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-                left: 20,
-                right: 20,
-                top: 20,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Tambah Lokasi',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<int>(
-                      decoration: const InputDecoration(
-                        labelText: 'Pilih Seller',
-                        border: OutlineInputBorder(),
-                      ),
-                      value: selectedSellerId,
-                      items: sellers.map<DropdownMenuItem<int>>((s) {
-                        return DropdownMenuItem<int>(
-                          value: s['id_seller'] as int,
-                          child: Text(s['nama_seller'].toString()),
-                        );
-                      }).toList(),
-                      onChanged: (val) {
-                        setSheetState(() {
-                          selectedSellerId = val;
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 50),
-                      ),
-                      onPressed: () async {
-                        if (selectedSellerId == null) return;
-                        Navigator.pop(ctx);
-                        final res = await ApiClient.addStop(
-                          _idRitase,
-                          selectedSellerId!,
-                        );
-                        if (res != null) {
-                          await _fetchActiveRitase();
-                          setState(() {
-                            if (_allSellers.isNotEmpty) {
-                              _currentSeller = _allSellers.last;
-                            }
-                          });
-                          _showSnack('Berhasil menambahkan lokasi!');
-                        } else {
-                          _showSnack('Gagal menambahkan lokasi');
-                        }
-                      },
-                      child: const Text('Tambah ke Rute'),
-                    ),
-                    const SizedBox(height: 20),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    if (s == 0) return '$m mnt';
+    return '$m mnt $s dtk';
   }
 
   void _handleBackToHome() {
@@ -1091,32 +1050,31 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
+              borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
-              Icon(Icons.arrow_back, color: Color(0xFF0D47A1), size: 24),
+              Icon(Icons.arrow_back,
+                  color: AppColors.navy, size: 24),
               SizedBox(width: 8),
-              Text(
-                'Kembali ke Beranda',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
+              Text('Kembali ke Beranda',
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold)),
             ],
           ),
           content: const Text(
-            'Apakah Anda yakin ingin keluar dan kembali ke halaman beranda? Perjalanan saat ini akan dihentikan.',
-            style: TextStyle(fontSize: 14, color: Colors.black87),
+            'Perjalanan saat ini akan dihentikan.',
+            style: TextStyle(
+                fontSize: 14, color: Colors.black87),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(),
+              child: const Text('Batal',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold)),
             ),
             ElevatedButton(
               onPressed: () {
@@ -1124,16 +1082,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 _resetSimulation();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0D47A1),
+                backgroundColor: AppColors.navy,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius:
+                      BorderRadius.circular(8),
                 ),
               ),
-              child: const Text(
-                'Ya, Kembali',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
+              child: const Text('Ya, Kembali',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold)),
             ),
           ],
         );
@@ -1141,1111 +1099,417 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(
-        title: Text(_isTripStarted ? 'Perjalanan Driver' : 'Beranda Driver'),
-        centerTitle: true,
-        leading: _isTripStarted
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                tooltip: 'Kembali ke Beranda',
-                onPressed: _handleBackToHome,
-              )
-            : null,
-        actions: [
-          IconButton(
-            onPressed: _resetSimulation,
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Reset Simulasi',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
-            tooltip: 'Logout',
-            onPressed: _confirmLogout,
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await _fetchActiveRitase();
-        },
-        color: const Color(0xFF0D47A1),
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  void _confirmExitApp() {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Row(
             children: [
-              // Sederhana: Hai, AWALUDIN! (Tampil saat di Beranda)
-              if (!_isTripStarted) ...[
-                Text(
-                  'Hai, $_driverName!',
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _buildVehicleCard(),
-                const SizedBox(height: 14),
-              ],
-
-            // Banner Gudang Outgoing Utama
-            _buildWarehouseCard(),
-            const SizedBox(height: 16),
-
-            // Tombol Mulai Perjalanan langsung di bawah Asal Gudang (saat di Beranda)
-            if (!_isTripStarted) ...[
-              if (_allSellers.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.amber.shade300),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.amber),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Belum ada penugasan rute harian untuk kendaraan ini.',
-                          style: TextStyle(color: Colors.black87),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      if (_allSellers.isNotEmpty) {
-                        setState(() {
-                          _completedStops.clear();
-                        });
-                        _startTripDirectly(_allSellers.first);
-                      }
-                    },
-                    icon: const Icon(Icons.play_arrow_rounded, size: 26),
-                    label: const Text(
-                      'Mulai Perjalanan',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0D47A1),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      elevation: 2,
-                    ),
-                  ),
-                ),
+              Icon(Icons.logout,
+                  color: AppColors.navy, size: 24),
+              SizedBox(width: 8),
+              Text('Keluar Aplikasi',
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold)),
             ],
-
-            const SizedBox(height: 16),
-
-            // Ringkasan Riwayat Seller yang Sudah Dikunjungi (Jika Ada)
-            if (_completedStops.isNotEmpty) ...[
-              _buildCompletedStopsHistoryCard(),
-              const SizedBox(height: 16),
-            ],
-
-            // Tampilan Berdasarkan Status Perjalanan
-            if (_isTripStarted) ...[
-              if (_isEntireRouteCompleted) ...[
-                _buildEntireRouteCompletedCard(),
-              ] else ...[
-                _buildActiveTripSellerCard(),
-                const SizedBox(height: 16),
-                _buildTimelineStatusCard(),
-              ],
-            ],
-          ],
-        ),
-      ),
-    ),
-  );
-  }
-
-  // Card GPS Live Tracking Real-Time dengan Indikator Mode Smart Interval
-  Widget _buildGpsTrackingBanner() {
-    final isActive = _isTripStarted && !_isEntireRouteCompleted;
-    final now = DateTime.now();
-    final secondsSinceLastMove = _lastMovementTime != null
-        ? now.difference(_lastMovementTime!).inSeconds
-        : 0;
-    final isBatterySaver =
-        isActive &&
-        secondsSinceLastMove >= _stationarySendSeconds &&
-        (_currentStage == TripStage.loadingGoods ||
-            _currentStage == TripStage.arrived);
-
-    final String modeLabel = !isActive
-        ? 'Standby'
-        : (isBatterySaver ? 'Hemat Baterai (3 mnt)' : 'Real-time (8 dtk)');
-
-    final Color statusColor = !isActive
-        ? Colors.grey
-        : (isBatterySaver ? const Color(0xFFFF8F00) : Colors.green.shade700);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: statusColor.withValues(alpha: 0.3),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: statusColor.withValues(alpha: 0.05),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  Icons.satellite_alt_rounded,
-                  color: statusColor,
-                  size: 20,
+          content: const Text(
+            'Yakin mau keluar dari aplikasi?',
+            style: TextStyle(
+                fontSize: 14, color: Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(),
+              child: const Text('Batal',
+                  style: TextStyle(
+                      color: Colors.grey,
+                      fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                // Keluar beneran: matiin tracking + kasih tau backend biar
+                // armada langsung Offline di dashboard (gak nunggu ambang 3 mnt).
+                try {
+                  await sendOfflineSignal();
+                } catch (_) {}
+                try {
+                  await stopBackgroundTracking();
+                } catch (_) {}
+                if (!mounted) return;
+                SystemNavigator.pop();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.navy,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius:
+                      BorderRadius.circular(8),
                 ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'GPS Smart Tracking',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.grey[900],
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: statusColor.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            modeLabel,
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: statusColor,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isActive
-                          ? (isBatterySaver
-                                ? 'Armada diam > 3 mnt. Interval pengiriman 3 mnt (hemat baterai)'
-                                : 'Armada bergerak. Mengirim koordinat setiap 8 dtk')
-                          : 'GPS dalam posisi siaga. Tekan Mulai Perjalanan.',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (isActive) ...[
-            const SizedBox(height: 10),
-            const Divider(height: 1),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.my_location,
-                      size: 14,
-                      color: Color(0xFF0D47A1),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${_latitude.toStringAsFixed(6)}, ${_longitude.toStringAsFixed(6)}',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    const Icon(Icons.speed, size: 14, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$_currentSpeedKmH km/h (${_currentSpeedKmH > 0 ? 'Berjalan' : 'Berdiam'})',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              child: const Text('Keluar',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold)),
             ),
           ],
-        ],
+        );
+      },
+    );
+  }
+
+  // ═══════════════════════════════════════════════
+  //  BUILD
+  // ═══════════════════════════════════════════════
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        // Saat trip berjalan → konfirmasi kembali ke beranda,
+        // selain itu → konfirmasi keluar aplikasi.
+        if (_isTripStarted) {
+          _handleBackToHome();
+        } else {
+          _confirmExitApp();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.scaffoldBg,
+        body: RefreshIndicator(
+          onRefresh: () async {
+            await _fetchActiveRitase();
+          },
+          color: AppColors.navy,
+          child: CustomScrollView(
+            physics:
+                const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              // ── Header ──
+              _buildHeader(),
+              // ── Body ──
+              SliverToBoxAdapter(
+                child: _isTripStarted
+                    ? _buildTripBody()
+                    : _buildHomeBody(),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  // Kotak Informasi Kendaraan yang dikendarai (Dapat diklik untuk memilih/mengganti kendaraan)
-  Widget _buildVehicleCard() {
-    Map<String, dynamic>? currentVehicle;
-    try {
-      currentVehicle =
-          _vehicles.firstWhere((v) => v['id'] == _idKendaraan)
-              as Map<String, dynamic>?;
-    } catch (_) {}
-
-    final plat =
-        currentVehicle?['plat']?.toString() ??
-        _selectedVehiclePlat ??
-        'B 9806 UXV';
-    final type = currentVehicle?['type']?.toString() ?? 'CDDL';
-    final capacity = currentVehicle?['capacity_kg'] != null
-        ? '${currentVehicle!['capacity_kg']} kg'
-        : '7.000 kg (7 Ton)';
-
-    return InkWell(
-      onTap: _showVehicleSelection,
-      borderRadius: BorderRadius.circular(14),
+  // ── Header (gradient + wave + logo + sapaan) ──
+  Widget _buildHeader() {
+    return SliverToBoxAdapter(
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: const Color(0xFF0D47A1).withValues(alpha: 0.2),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+        decoration: const BoxDecoration(
+          gradient: AppColors.navyGradient,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Row(
-                  children: [
-                    Icon(
-                      Icons.local_shipping_outlined,
-                      color: Color(0xFF0D47A1),
-                      size: 20,
-                    ),
-                    SizedBox(width: 8),
-                    Text(
-                      'Kendaraan Operasional',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                  ],
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Row(
-                    children: [
-                      Text(
-                        'Pilih / Ganti',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF0D47A1),
-                        ),
-                      ),
-                      SizedBox(width: 2),
-                      Icon(
-                        Icons.chevron_right,
-                        size: 14,
-                        color: Color(0xFF0D47A1),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            // Wave background
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: CustomPaint(
+                size: Size(
+                    MediaQuery.of(context).size.width, 20),
+                painter: _WavePainter(),
+              ),
             ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(10),
+            // Content
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                MediaQuery.of(context).padding.top + 16,
+                20,
+                35,
               ),
               child: Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      plat,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.yellow,
-                        letterSpacing: 1.2,
+                  // Back button during trip
+                  if (_isTripStarted)
+                    GestureDetector(
+                      onTap: _handleBackToHome,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          Icons.arrow_back_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                       ),
+                    ),
+                  if (_isTripStarted)
+                    const SizedBox(width: 10),
+                  // Logo
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white
+                          .withValues(alpha: 0.15),
+                      borderRadius:
+                          BorderRadius.circular(12),
+                    ),
+                    child: Image.asset(
+                      'assets/images/logo_mustgo.png',
+                      width: 36,
+                      height: 36,
+                      errorBuilder:
+                          (context, error, stack) {
+                        return const Icon(
+                          Icons.local_shipping_rounded,
+                          size: 32,
+                          color: Colors.white,
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(width: 14),
+                  // Sapaan
                   Expanded(
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Jenis: $type',
+                          'Hai, $_driverName!',
                           style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
                           ),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Kapasitas: $capacity',
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Card Informasi Gudang Outgoing
-  Widget _buildWarehouseCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0D47A1).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.warehouse_outlined,
-              color: Color(0xFF0D47A1),
-              size: 28,
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Asal Gudang',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Gudang Outgoing Utama',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    color: Color(0xFF0D47A1),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Card Ringkasan Riwayat Seller yang Sudah Dikunjungi
-  Widget _buildCompletedStopsHistoryCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.green.shade400, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.verified, color: Colors.green, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                'Riwayat Penjemputan Selesai (${_completedStops.length})',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: Colors.green,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ..._completedStops.asMap().entries.map((entry) {
-            final idx = entry.key + 1;
-            final stop = entry.value;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 22,
-                    height: 22,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$idx',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          stop.seller.name,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        Text(
-                          '${stop.actualAwb} AWB, ${stop.actualKoli} Koli, ${stop.actualEcer} Ecer • Durasi: ${_formatReadableDuration(stop.totalDurationSeconds)}',
+                          _isTripStarted
+                              ? _currentStageTitle
+                              : 'Siap bertugas hari ini?',
                           style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.grey[600],
+                            fontSize: 13,
+                            color: Colors.white
+                                .withValues(alpha: 0.7),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.done_all, color: Colors.green, size: 18),
-                ],
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-
-  // Card Informasi Seller yang Sedang Dituju
-  Widget _buildActiveTripSellerCard() {
-    final seller = _currentSeller;
-    if (seller == null) {
-      return Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.grey.shade300, width: 1.2),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.location_off_outlined, color: Colors.grey),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Lokasi Seller (Belum Dipilih)',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: Colors.black87,
-                ),
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: _showAddStopModal,
-              icon: const Icon(Icons.add_location_alt, size: 16),
-              label: const Text('Pilih Seller', style: TextStyle(fontSize: 12)),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    String badgeText = 'LOKASI TUJUAN #${_completedStops.length + 1}';
-    String labelName = 'Nama Lokasi : ';
-
-    final currentStopNum = _completedStops.length + 1;
-    final totalStops = _allSellers.length;
-
-    if (seller.jenisStop == 'gudang') {
-      badgeText = 'GUDANG — STOP $currentStopNum dari $totalStops';
-      labelName = 'Nama Gudang : ';
-    } else if (seller.jenisStop == 'drop_point') {
-      badgeText = 'GATEWAY — STOP $currentStopNum dari $totalStops';
-      labelName = 'Nama Gateway : ';
-    } else if (seller.jenisStop == 'seller') {
-      badgeText = 'SELLER — STOP $currentStopNum dari $totalStops';
-      labelName = 'Nama Seller : ';
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D47A1).withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF0D47A1), width: 1.2),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF8F00),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  badgeText,
-                  style: const TextStyle(
+                  // Truck illustration
+                  if (!_isTripStarted)
+                    Image.asset(
+                      'assets/images/truck_illustration.png',
+                      width: 100,
+                      height: 60,
+                      fit: BoxFit.contain,
+                      errorBuilder:
+                          (context, error, stack) {
+                        return Icon(
+                          Icons.local_shipping_rounded,
+                          size: 48,
+                          color: Colors.white
+                              .withValues(alpha: 0.3),
+                        );
+                      },
+                    ),
+                  // Settings menu
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      color: Colors.white
+                          .withValues(alpha: 0.9),
+                    ),
                     color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          // Progress bar visual semua stop
-          Row(
-            children: List.generate(totalStops, (i) {
-              final isDone = i < _completedStops.length;
-              final isCurrent = i == _completedStops.length;
-              return Expanded(
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: isDone
-                        ? Colors.green
-                        : isCurrent
-                            ? const Color(0xFFFF8F00)
-                            : Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-              );
-            }),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Progres: ${_completedStops.length} / $totalStops stop selesai',
-            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 12),
-          RichText(
-            text: TextSpan(
-              style: const TextStyle(fontSize: 14, color: Colors.black87),
-              children: [
-                TextSpan(
-                  text: labelName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0D47A1),
-                  ),
-                ),
-                TextSpan(
-                  text: seller.name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          RichText(
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.grey[800],
-                height: 1.3,
-              ),
-              children: [
-                const TextSpan(
-                  text: 'Alamat : ',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                TextSpan(text: seller.address),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Timeline Status Perjalanan + Form Input Driver-Friendly di Bagian Bawah
-  Widget _buildTimelineStatusCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade300),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Status Perjalanan (Live Track)',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0D47A1),
-                ),
-              ),
-              if (_currentStage != TripStage.completed)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0D47A1).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.hourglass_top,
-                        size: 14,
-                        color: Color(0xFF0D47A1),
+                    elevation: 4,
+                    shape: RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(12),
+                    ),
+                    onSelected: (value) {
+                      if (value == 'password') {
+                        _showChangePasswordDialog();
+                      } else if (value == 'logout') {
+                        _confirmLogout();
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'password',
+                        height: 44,
+                        child: Row(
+                          children: [
+                            Icon(Icons.lock_reset_rounded,
+                                size: 18, color: AppColors.navy),
+                            SizedBox(width: 10),
+                            Text('Ganti Password'),
+                          ],
+                        ),
                       ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _formatDuration(_activeStageSeconds),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                          color: Color(0xFF0D47A1),
-                          fontFamily: 'monospace',
+                      const PopupMenuItem(
+                        value: 'logout',
+                        height: 44,
+                        child: Row(
+                          children: [
+                            Icon(Icons.logout_rounded,
+                                size: 18, color: AppColors.error),
+                            SizedBox(width: 10),
+                            Text('Logout',
+                                style: TextStyle(
+                                    color: AppColors.error)),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ),
-            ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Home body (before trip started) ──
+  Widget _buildHomeBody() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Vehicle
+          AnimatedOpacity(
+            opacity: _cardVisible[0] ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 400),
+            child: AnimatedSlide(
+              offset: _cardVisible[0]
+                  ? Offset.zero
+                  : const Offset(0, 0.1),
+              duration: const Duration(milliseconds: 400),
+              child: VehicleCard(
+                plat:
+                    _selectedVehiclePlat ?? 'B 9806 UXV',
+                type: _selectedVehicleType ?? 'CDDL',
+                capacity: '7.000 kg',
+                onTap: _showVehicleSelection,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Origin
+          AnimatedOpacity(
+            opacity: _cardVisible[1] ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 400),
+            child: AnimatedSlide(
+              offset: _cardVisible[1]
+                  ? Offset.zero
+                  : const Offset(0, 0.1),
+              duration: const Duration(milliseconds: 400),
+              child: const OriginCard(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Empty state or CTA
+          if (_allSellers.isEmpty)
+            _buildEmptyState()
+          else
+            AnimatedOpacity(
+              opacity: _cardVisible[2] ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 400),
+              child: AnimatedSlide(
+                offset: _cardVisible[2]
+                    ? Offset.zero
+                    : const Offset(0, 0.1),
+                duration: const Duration(milliseconds: 400),
+                child: _buildStartButton(),
+              ),
+            ),
+          // Completed stops history
+          if (_completedStops.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _buildCompletedStopsHistoryCard(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Trip body (during trip) ──
+  Widget _buildTripBody() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Current destination
+          if (_currentSeller != null &&
+              !_isEntireRouteCompleted)
+            _buildActiveTripSellerCard(),
+          const SizedBox(height: 12),
+          // Completed history
+          if (_completedStops.isNotEmpty) ...[
+            _buildCompletedStopsHistoryCard(),
+            const SizedBox(height: 12),
+          ],
+          if (_isEntireRouteCompleted)
+            _buildEntireRouteCompletedCard()
+          else if (_currentStage == TripStage.completed)
+            _buildRitaseDoneCard()
+          else ...[
+            _buildTimelineStatusCard(),
+            const SizedBox(height: 12),
+            _buildGpsTrackingBanner(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Shown when all stops in current ritase are done but ritase not yet finalized.
+  Widget _buildRitaseDoneCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: AppColors.success.withValues(alpha: 0.3),
+            width: 2),
+      ),
+      child: Column(
+        children: [
+          const Icon(Icons.check_circle,
+              color: AppColors.success, size: 48),
+          const SizedBox(height: 10),
+          Text(
+            'Semua ${_completedStops.length} titik stop selesai!',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppColors.success,
+              fontSize: 15,
+            ),
           ),
           const SizedBox(height: 16),
-
-          // ── Render Full Expanded Timeline ─────────────────────────────────
-          // Bangun flat list semua step untuk seluruh segmen ritase
-          // Setiap segmen i: origin = allSellers[i], tujuan = allSellers[i+1]
-          // Steps: [Bongkar Muat di origin, Keluar origin, Menuju tujuan, Tiba di tujuan]
-          // Ditambah step "Selesai" di akhir
-          Builder(builder: (context) {
-            // Bangun daftar virtual step
-            final segmentCount = (_allSellers.length - 1).clamp(1, 99);
-            final List<_TimelineStep> steps = [];
-
-            for (int seg = 0; seg < segmentCount; seg++) {
-              final origin = _allSellers[seg];
-              final destination = _allSellers[seg + 1];
-
-              final originType = _getJenisLokasi(origin.jenisStop);
-              final destType = _getJenisLokasi(destination.jenisStop);
-
-              steps.add(_TimelineStep(
-                title: 'Bongkar Muat di ${origin.name}',
-                subtitle: 'Proses pengisian muatan di $originType',
-                icon: Icons.inventory_2_outlined,
-                segIndex: seg,
-                stageIndex: 0, // loadingGoods
-              ));
-              steps.add(_TimelineStep(
-                title: 'Keluar dari ${origin.name}',
-                subtitle: 'Truk bergerak meninggalkan area $originType',
-                icon: Icons.local_shipping_outlined,
-                segIndex: seg,
-                stageIndex: 1, // leavingWarehouse
-              ));
-              steps.add(_TimelineStep(
-                title: 'Menuju ${destination.name}',
-                subtitle: 'Sedang dalam perjalanan menuju $destType tujuan',
-                icon: Icons.navigation_outlined,
-                segIndex: seg,
-                stageIndex: 2, // enRoute
-              ));
-              steps.add(_TimelineStep(
-                title: 'Tiba di ${destination.name}',
-                subtitle: 'Truk telah sampai di $destType',
-                icon: Icons.location_on_outlined,
-                segIndex: seg,
-                stageIndex: 3, // arrived
-              ));
-            }
-
-            // Step terakhir: Selesai
-            steps.add(_TimelineStep(
-              title: 'Selesai',
-              subtitle: 'Seluruh rangkaian perjalanan ritase ini selesai',
-              icon: Icons.check_circle_outline,
-              segIndex: segmentCount,
-              stageIndex: -1, // completed
-            ));
-
-            // Hitung global step index saat ini
-            // Setiap segmen punya 4 steps (index 0-3)
-            // Global current step = completedStops.length * 4 + currentStage.index
-            final int currentGlobal;
-            if (_currentStage == TripStage.completed) {
-              currentGlobal = steps.length - 1; // step "Selesai"
-            } else {
-              currentGlobal = _completedStops.length * 4 + _currentStage.index;
-            }
-
-            return Column(
-              children: steps.asMap().entries.map((entry) {
-                final globalIdx = entry.key;
-                final step = entry.value;
-                final isCurrent = globalIdx == currentGlobal;
-                final isPassed = globalIdx < currentGlobal;
-                final isLast = globalIdx == steps.length - 1;
-
-                // Ambil durasi dari stage jika sudah selesai (hanya untuk segmen aktif)
-                int? durationSec;
-                if (isPassed && step.segIndex == _completedStops.length && step.stageIndex >= 0) {
-                  durationSec = _currentStageDurations[TripStage.values[step.stageIndex]];
-                } else if (isPassed && step.segIndex < _completedStops.length && step.stageIndex >= 0) {
-                  durationSec = _completedStops[step.segIndex].stageDurations[TripStage.values[step.stageIndex]];
-                }
-
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Column(
-                        children: [
-                          Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: isPassed
-                                  ? Colors.green
-                                  : isCurrent
-                                  ? const Color(0xFF0D47A1)
-                                  : Colors.grey.shade200,
-                              border: Border.all(
-                                color: isCurrent
-                                    ? const Color(0xFFFF8F00)
-                                    : Colors.transparent,
-                                width: 2,
-                              ),
-                            ),
-                            child: Icon(
-                              isPassed ? Icons.check : step.icon,
-                              color: (isPassed || isCurrent)
-                                  ? Colors.white
-                                  : Colors.grey,
-                              size: 16,
-                            ),
-                          ),
-                          if (!isLast)
-                            Expanded(
-                              child: Container(
-                                width: 2,
-                                color: isPassed
-                                    ? Colors.green
-                                    : Colors.grey.shade300,
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      step.title,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: isCurrent
-                                            ? FontWeight.bold
-                                            : FontWeight.w600,
-                                        color: isPassed
-                                            ? Colors.green[800]
-                                            : isCurrent
-                                            ? const Color(0xFF0D47A1)
-                                            : Colors.grey[700],
-                                      ),
-                                    ),
-                                  ),
-                                  if (durationSec != null) ...[
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green[50],
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.timer,
-                                            size: 11,
-                                            color: Colors.green,
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            _formatReadableDuration(durationSec),
-                                            style: const TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.green,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                step.subtitle,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: isCurrent
-                                      ? Colors.black87
-                                      : Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            );
-          }),
-
-          // Form Input Driver-Friendly di Bagian Bawah (saat tahap Bongkar Muat)
-          if (_currentStage == TripStage.loadingGoods) ...[
-            _buildDriverFriendlyInputForm(),
-            const SizedBox(height: 16),
-          ],
-
-          const SizedBox(height: 12),
-
-          // Tombol Update Status Berikutnya
-          if (_currentStage != TripStage.completed) ...[
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: _confirmAndNextStage,
-                icon: const Icon(Icons.navigation_outlined, size: 22),
-                label: Text(
-                  _getNextStageButtonLabel(),
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF8F00),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  elevation: 2,
-                ),
-              ),
-            ),
-          ] else ...[
-            // Semua stop dalam ritase ini sudah selesai otomatis
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.green.shade400),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.check_circle, color: Colors.green, size: 28),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Semua ${_completedStops.length} titik stop dalam ritase ini selesai!',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-
-            ElevatedButton.icon(
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
               onPressed: _finishEntireRoute,
               icon: Icon(
                 _isLastRitase
@@ -2254,39 +1518,750 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               label: Text(
                 _isLastRitase
-                    ? 'Perjalanan Sudah Selesai'
-                    : 'Selesaikan Ritase & Lanjut Rute Berikutnya',
+                    ? 'Selesai'
+                    : 'Selesaikan & Lanjut Rute',
                 style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                ),
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isLastRitase
-                    ? Colors.green.shade700
-                    : const Color(0xFF0D47A1),
+                    ? AppColors.success
+                    : AppColors.navy,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 48),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
+                elevation: 0,
               ),
             ),
-          ],
+          ),
         ],
       ),
     );
   }
 
-  // Form Input Driver-Friendly di Bagian Bawah (Tombol +, - dan Font Besar)
-  Widget _buildDriverFriendlyInputForm() {
+  // ── Empty state ──
+  Widget _buildEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          Icon(
+            Icons.route_outlined,
+            size: 48,
+            color: AppColors.textMuted,
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Belum ada rute hari ini',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Tunggu penugasan dari admin',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await _fetchActiveRitase();
+            },
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Refresh',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.navy,
+              side:
+                  const BorderSide(color: AppColors.navy),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── CTA button ──
+  Widget _buildStartButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 54,
+      child: ElevatedButton.icon(
+        onPressed: () {
+          if (_allSellers.isNotEmpty) {
+            setState(() {
+              _completedStops.clear();
+            });
+            _startTripDirectly(_allSellers.first);
+          }
+        },
+        icon: const Icon(Icons.play_arrow_rounded,
+            size: 26),
+        label: const Text(
+          'Mulai Perjalanan',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.orange,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          elevation: 0,
+        ),
+      ),
+    );
+  }
+
+  // ── GPS Tracking Banner ──
+  Widget _buildGpsTrackingBanner() {
+    final isActive =
+        _isTripStarted && !_isEntireRouteCompleted;
+    final now = DateTime.now();
+    final secSinceLastMove = _lastMovementTime != null
+        ? now.difference(_lastMovementTime!).inSeconds
+        : 0;
+    final isBatterySaver = isActive &&
+        secSinceLastMove >= _stationarySendSeconds &&
+        (_currentStage == TripStage.loadingGoods ||
+            _currentStage == TripStage.arrived);
+
+    final modeLabel = !isActive
+        ? 'Standby'
+        : (isBatterySaver
+            ? 'Hemat Baterai'
+            : 'Real-time');
+    final statusColor = !isActive
+        ? AppColors.textMuted
+        : (isBatterySaver
+            ? AppColors.orange
+            : AppColors.success);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: statusColor.withValues(alpha: 0.3),
+          width: 1.2,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              Icons.satellite_alt_rounded,
+              color: statusColor,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'GPS Tracking',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2),
+                      decoration: BoxDecoration(
+                        color: statusColor
+                            .withValues(alpha: 0.1),
+                        borderRadius:
+                            BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        modeLabel,
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: statusColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${_latitude.toStringAsFixed(5)}, ${_longitude.toStringAsFixed(5)} · ${_currentSpeedKmH} km/h',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Active trip seller card ──
+  Widget _buildActiveTripSellerCard() {
+    final seller = _currentSeller;
+    if (seller == null) return const SizedBox.shrink();
+
+    final currentStopNum = _completedStops.length + 1;
+    final totalStops = _allSellers.length;
+
+    String badgeText = 'LOKASI #$currentStopNum';
+    if (seller.jenisStop == 'gudang') {
+      badgeText = 'GUDANG — $currentStopNum/$totalStops';
+    } else if (seller.jenisStop == 'drop_point') {
+      badgeText =
+          'GATEWAY — $currentStopNum/$totalStops';
+    } else {
+      badgeText =
+          'SELLER — $currentStopNum/$totalStops';
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFF8F00).withValues(alpha: 0.08),
+        color: AppColors.navy.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFFF8F00), width: 1.5),
+        border: Border.all(
+          color: AppColors.navy.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Badge
+          Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.orange,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              badgeText,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Progress dots
+          Row(
+            children: List.generate(totalStops, (i) {
+              final isDone = i < _completedStops.length;
+              final isCurrent =
+                  i == _completedStops.length;
+              return Expanded(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(
+                      horizontal: 2),
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: isDone
+                        ? AppColors.success
+                        : isCurrent
+                            ? AppColors.orange
+                            : AppColors.borderLight,
+                    borderRadius:
+                        BorderRadius.circular(3),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 12),
+          // Name
+          Text(
+            seller.name,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 4),
+          // Address
+          Text(
+            seller.address,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Completed stops history ──
+  Widget _buildCompletedStopsHistoryCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: AppColors.success.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.verified,
+                  color: AppColors.success, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Selesai (${_completedStops.length})',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: AppColors.success,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ..._completedStops.asMap().entries.map((entry) {
+            final idx = entry.key + 1;
+            final stop = entry.value;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.successBg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 20,
+                    height: 20,
+                    decoration: const BoxDecoration(
+                      color: AppColors.success,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$idx',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          stop.seller.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color:
+                                AppColors.textPrimary,
+                          ),
+                        ),
+                        Text(
+                          '${stop.actualKoli} koli · ${stop.actualEcer} ecer · ${_formatReadableDuration(stop.totalDurationSeconds)}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppColors
+                                .textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.done_all,
+                      color: AppColors.success,
+                      size: 16),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  // ── Timeline card ──
+  Widget _buildTimelineStatusCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment:
+                MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Status Perjalanan',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              if (_currentStage !=
+                  TripStage.completed)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.navy
+                        .withValues(alpha: 0.08),
+                    borderRadius:
+                        BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                          Icons.hourglass_top,
+                          size: 12,
+                          color: AppColors.navy),
+                      const SizedBox(width: 4),
+                      Text(
+                        _formatDuration(
+                            _activeStageSeconds),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                          color: AppColors.navy,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Timeline
+          _buildTimeline(),
+          // Input form during loading
+          if (_currentStage ==
+              TripStage.loadingGoods) ...[
+            const SizedBox(height: 12),
+            _buildDriverFriendlyInputForm(),
+          ],
+          const SizedBox(height: 12),
+          // Next stage button
+          if (_currentStage !=
+              TripStage.completed)
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: _confirmAndNextStage,
+                icon: const Icon(
+                    Icons.navigation_outlined,
+                    size: 20),
+                label: Text(
+                  _getNextStageButtonLabel(),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.orange,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeline() {
+    final segmentCount =
+        (_allSellers.length - 1).clamp(1, 99);
+    final List<_TimelineStep> steps = [];
+
+    for (int seg = 0; seg < segmentCount; seg++) {
+      final origin = _allSellers[seg];
+      final destination = _allSellers[seg + 1];
+      final originType =
+          _getJenisLokasi(origin.jenisStop);
+      final destType =
+          _getJenisLokasi(destination.jenisStop);
+
+      steps.add(_TimelineStep(
+        title: 'Bongkar Muat di ${origin.name}',
+        subtitle: 'Proses pengisian muatan',
+        icon: Icons.inventory_2_outlined,
+        segIndex: seg,
+        stageIndex: 0,
+      ));
+      steps.add(_TimelineStep(
+        title: 'Keluar dari ${origin.name}',
+        subtitle: 'Meninggalkan $originType',
+        icon: Icons.local_shipping_outlined,
+        segIndex: seg,
+        stageIndex: 1,
+      ));
+      steps.add(_TimelineStep(
+        title: 'Menuju ${destination.name}',
+        subtitle: 'Perjalanan ke $destType',
+        icon: Icons.navigation_outlined,
+        segIndex: seg,
+        stageIndex: 2,
+      ));
+      steps.add(_TimelineStep(
+        title: 'Tiba di ${destination.name}',
+        subtitle: 'Sampai di $destType',
+        icon: Icons.location_on_outlined,
+        segIndex: seg,
+        stageIndex: 3,
+      ));
+    }
+
+    steps.add(_TimelineStep(
+      title: 'Selesai',
+      subtitle: 'Perjalanan selesai',
+      icon: Icons.check_circle_outline,
+      segIndex: segmentCount,
+      stageIndex: -1,
+    ));
+
+    final int currentGlobal;
+    if (_currentStage == TripStage.completed) {
+      currentGlobal = steps.length - 1;
+    } else {
+      currentGlobal = _completedStops.length * 4 +
+          _currentStage.index;
+    }
+
+    return Column(
+      children: steps.asMap().entries.map((entry) {
+        final globalIdx = entry.key;
+        final step = entry.value;
+        final isCurrent = globalIdx == currentGlobal;
+        final isPassed = globalIdx < currentGlobal;
+        final isLast = globalIdx == steps.length - 1;
+
+        int? durationSec;
+        if (isPassed &&
+            step.segIndex == _completedStops.length &&
+            step.stageIndex >= 0) {
+          durationSec =
+              _currentStageDurations[
+                  TripStage.values[step.stageIndex]];
+        } else if (isPassed &&
+            step.segIndex < _completedStops.length &&
+            step.stageIndex >= 0) {
+          durationSec = _completedStops[step.segIndex]
+                  .stageDurations[
+              TripStage.values[step.stageIndex]];
+        }
+
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              Column(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isPassed
+                          ? AppColors.success
+                          : isCurrent
+                              ? AppColors.navy
+                              : AppColors.borderLight,
+                      border: Border.all(
+                        color: isCurrent
+                            ? AppColors.orange
+                            : Colors.transparent,
+                        width: 2,
+                      ),
+                    ),
+                    child: Icon(
+                      isPassed
+                          ? Icons.check
+                          : step.icon,
+                      color: (isPassed || isCurrent)
+                          ? Colors.white
+                          : AppColors.textMuted,
+                      size: 14,
+                    ),
+                  ),
+                  if (!isLast)
+                    Expanded(
+                      child: Container(
+                        width: 2,
+                        color: isPassed
+                            ? AppColors.success
+                            : AppColors.borderLight,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(
+                      bottom: 16.0),
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment
+                                .spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              step.title,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: isCurrent
+                                    ? FontWeight.bold
+                                    : FontWeight.w600,
+                                color: isPassed
+                                    ? AppColors
+                                        .success
+                                    : isCurrent
+                                        ? AppColors
+                                            .navy
+                                        : AppColors
+                                            .textSecondary,
+                              ),
+                            ),
+                          ),
+                          if (durationSec !=
+                              null) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding:
+                                  const EdgeInsets
+                                      .symmetric(
+                                      horizontal: 5,
+                                      vertical: 2),
+                              decoration:
+                                  BoxDecoration(
+                                color: AppColors
+                                    .successBg,
+                                borderRadius:
+                                    BorderRadius
+                                        .circular(4),
+                              ),
+                              child: Text(
+                                _formatReadableDuration(
+                                    durationSec),
+                                style: const TextStyle(
+                                  fontSize: 9,
+                                  fontWeight:
+                                      FontWeight.bold,
+                                  color: AppColors
+                                      .success,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      Text(
+                        step.subtitle,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isCurrent
+                              ? AppColors.textPrimary
+                              : AppColors.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // ── Driver input form ──
+  Widget _buildDriverFriendlyInputForm() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.orange.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppColors.orange.withValues(alpha: 0.3),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2296,45 +2271,37 @@ class _HomeScreenState extends State<HomeScreen> {
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFF8F00),
-                  borderRadius: BorderRadius.circular(8),
+                  color: AppColors.orange,
+                  borderRadius:
+                      BorderRadius.circular(8),
                 ),
                 child: const Icon(
                   Icons.touch_app,
                   color: Colors.white,
-                  size: 20,
+                  size: 16,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Input Realisasi Muatan Barang',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    Text(
-                      'Masukkan jumlah Koli yang diangkut',
-                      style: TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                  ],
+                child: Text(
+                  'Input Muatan Barang',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           _buildVerticalStepperControl(
             label: 'Jumlah Koli (Box/Paket)',
             controller: _koliInputController,
             icon: Icons.inventory_2,
-            color: const Color(0xFFFF8F00),
+            color: AppColors.orange,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _buildVerticalStepperControl(
             label: 'Jumlah Ecer (Pcs)',
             controller: _ecerInputController,
@@ -2353,130 +2320,109 @@ class _HomeScreenState extends State<HomeScreen> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.borderLight),
       ),
       child: Column(
         children: [
           Row(
             children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 8),
+              Icon(icon, color: color, size: 16),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: Colors.black87,
+                  fontSize: 12,
+                  color: AppColors.textPrimary,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Material(
-                color: Colors.red[50],
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: () {
-                    int val = int.tryParse(controller.text.trim()) ?? 0;
-                    if (val > 0) {
-                      setState(() {
-                        controller.text = (val - 1).toString();
-                      });
-                    }
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.red.shade300),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.remove,
-                      color: Colors.red,
-                      size: 28,
-                    ),
-                  ),
-                ),
+              _buildStepperButton(
+                icon: Icons.remove,
+                color: AppColors.error,
+                onTap: () {
+                  int val = int.tryParse(
+                          controller.text.trim()) ??
+                      0;
+                  if (val > 0) {
+                    setState(() {
+                      controller.text =
+                          (val - 1).toString();
+                    });
+                  }
+                },
               ),
               const SizedBox(width: 16),
               SizedBox(
-                width: 90,
+                width: 80,
                 child: TextField(
                   controller: controller,
-                  keyboardType: TextInputType.number,
+                  keyboardType:
+                      TextInputType.number,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: FontWeight.w900,
-                    color: Colors.black87,
+                    color: AppColors.textPrimary,
                   ),
-                  decoration: const InputDecoration(
+                  decoration:
+                      const InputDecoration(
                     isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 8),
+                    contentPadding:
+                        EdgeInsets.symmetric(
+                            vertical: 6),
                     border: InputBorder.none,
                   ),
                 ),
               ),
               const SizedBox(width: 16),
-              Material(
-                color: Colors.green[50],
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: () {
-                    int val = int.tryParse(controller.text.trim()) ?? 0;
-                    setState(() {
-                      controller.text = (val + 1).toString();
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.green.shade300),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.add, color: Colors.green, size: 28),
-                  ),
-                ),
+              _buildStepperButton(
+                icon: Icons.add,
+                color: AppColors.success,
+                onTap: () {
+                  int val = int.tryParse(
+                          controller.text.trim()) ??
+                      0;
+                  setState(() {
+                    controller.text =
+                        (val + 1).toString();
+                  });
+                },
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          // Tombol Tambah Cepat (+10, +100, +1000) & Reset
+          const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildQuickAddChip(
-                  controller: controller,
-                  amount: 10,
-                  label: '+10',
-                ),
-                const SizedBox(width: 8),
-                _buildQuickAddChip(
-                  controller: controller,
-                  amount: 100,
-                  label: '+100',
-                ),
-                const SizedBox(width: 8),
-                _buildQuickAddChip(
-                  controller: controller,
-                  amount: 1000,
-                  label: '+1000',
-                ),
-                const SizedBox(width: 8),
-                _buildResetChip(controller: controller),
+                _buildQuickChip(
+                    controller: controller,
+                    amount: 10,
+                    label: '+10'),
+                const SizedBox(width: 6),
+                _buildQuickChip(
+                    controller: controller,
+                    amount: 100,
+                    label: '+100'),
+                const SizedBox(width: 6),
+                _buildQuickChip(
+                    controller: controller,
+                    amount: 1000,
+                    label: '+1000'),
+                const SizedBox(width: 6),
+                _buildResetChip(
+                    controller: controller),
               ],
             ),
           ),
@@ -2485,36 +2431,67 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildQuickAddChip({
+  Widget _buildStepperButton({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: color.withValues(alpha: 0.06),
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            border: Border.all(
+                color: color.withValues(alpha: 0.3)),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child:
+              Icon(icon, color: color, size: 22),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickChip({
     required TextEditingController controller,
     required int amount,
     required String label,
   }) {
     return Material(
-      color: const Color(0xFFFF8F00).withValues(alpha: 0.1),
-      borderRadius: BorderRadius.circular(8),
+      color: AppColors.orange.withValues(alpha: 0.08),
+      borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: () {
-          int val = int.tryParse(controller.text.trim()) ?? 0;
+          int val = int.tryParse(
+                  controller.text.trim()) ??
+              0;
           setState(() {
-            controller.text = (val + amount).toString();
+            controller.text =
+                (val + amount).toString();
           });
         },
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
             border: Border.all(
-              color: const Color(0xFFFF8F00).withValues(alpha: 0.5),
+              color:
+                  AppColors.orange.withValues(alpha: 0.3),
             ),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
             label,
             style: const TextStyle(
-              fontSize: 13,
+              fontSize: 11,
               fontWeight: FontWeight.bold,
-              color: Color(0xFFD84315),
+              color: AppColors.orange,
             ),
           ),
         ),
@@ -2522,33 +2499,38 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildResetChip({required TextEditingController controller}) {
+  Widget _buildResetChip(
+      {required TextEditingController controller}) {
     return Material(
-      color: Colors.grey[100],
-      borderRadius: BorderRadius.circular(8),
+      color: AppColors.borderLight,
+      borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: () {
           setState(() {
             controller.text = '0';
           });
         },
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade400),
-            borderRadius: BorderRadius.circular(8),
+            border:
+                Border.all(color: AppColors.borderLight),
+            borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
             children: [
-              Icon(Icons.refresh, size: 14, color: Colors.grey[700]),
-              const SizedBox(width: 4),
+              Icon(Icons.refresh,
+                  size: 12,
+                  color: AppColors.textSecondary),
+              const SizedBox(width: 3),
               Text(
                 'Reset',
                 style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 10,
                   fontWeight: FontWeight.bold,
-                  color: Colors.grey[800],
+                  color: AppColors.textSecondary,
                 ),
               ),
             ],
@@ -2559,70 +2541,67 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _getNextStageButtonLabel() {
-    final prevLoc = _previousLocationType;
     final currLoc = _currentDestinationType;
-
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Selesai Muat -> Keluar $prevLoc';
+        return 'Muat Selesai → Keluar';
       case TripStage.leavingWarehouse:
-        return 'Keluar $prevLoc -> Menuju $currLoc';
+        return 'Berangkat → Menuju $currLoc';
       case TripStage.enRoute:
-        return 'Tiba di Lokasi $currLoc';
+        return 'Tiba di Lokasi';
       case TripStage.arrived:
-        return 'Selesaikan Penjemputan di $currLoc Ini';
+        return 'Selesaikan di $currLoc';
       case TripStage.completed:
-        return 'Penjemputan Selesai';
+        return 'Selesai';
     }
   }
 
+  // ── Route completed card ──
   Widget _buildEntireRouteCompletedCard() {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.green.shade400, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.green.withValues(alpha: 0.1),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color:
+                AppColors.success.withValues(alpha: 0.3),
+            width: 2),
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events, color: Colors.green, size: 56),
+          const Icon(Icons.emoji_events,
+              color: AppColors.success, size: 52),
           const SizedBox(height: 12),
           const Text(
-            'Seluruh Perjalanan Selesai!',
+            'Perjalanan Selesai!',
             style: TextStyle(
-              fontSize: 20,
+              fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Colors.black87,
+              color: AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 6),
           Text(
-            'Terima kasih untuk pengirimannya hari ini, anda sudah bekerja dengan baik!',
+            'Terima kasih sudah mengirim hari ini.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            style: TextStyle(
+                fontSize: 13,
+                color: AppColors.textSecondary),
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
             onPressed: () async {
               _stopTimer();
-              setState(() {
-                _isLoadingActiveRitase = true;
-              });
-              await ApiClient.resetDriverTestRitase(_idDriver);
+              await ApiClient
+                  .resetDriverTestRitase(_idDriver);
               setState(() {
                 _isTripStarted = false;
                 _isEntireRouteCompleted = false;
                 _completedStops.clear();
-                _currentStage = TripStage.loadingGoods;
+                _currentStage =
+                    TripStage.loadingGoods;
                 _activeStageSeconds = 0;
                 _currentStageDurations.clear();
               });
@@ -2630,15 +2609,19 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             icon: const Icon(Icons.replay),
             label: const Text(
-              'Mulai Ulang Perjalanan (Testing)',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              'Mulai Ulang (Testing)',
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF8F00),
+              backgroundColor: AppColors.orange,
               foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 48),
+              minimumSize:
+                  const Size(double.infinity, 44),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius:
+                    BorderRadius.circular(12),
               ),
             ),
           ),
@@ -2646,11 +2629,13 @@ class _HomeScreenState extends State<HomeScreen> {
           OutlinedButton.icon(
             onPressed: _resetSimulation,
             icon: const Icon(Icons.home),
-            label: const Text('Kembali ke Beranda Utama'),
+            label: const Text('Kembali ke Beranda'),
             style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 44),
+              minimumSize: const Size(
+                  double.infinity, 44),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius:
+                    BorderRadius.circular(12),
               ),
             ),
           ),
@@ -2660,7 +2645,40 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-/// Konversi aman ke int — tahan null, tipe salah, dan String.
+/// Custom wave painter for header bottom edge.
+class _WavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppColors.scaffoldBg
+      ..style = PaintingStyle.fill;
+
+    final path = Path();
+    path.lineTo(0, size.height * 0.3);
+    path.quadraticBezierTo(
+      size.width * 0.25,
+      size.height * 0.0,
+      size.width * 0.5,
+      size.height * 0.3,
+    );
+    path.quadraticBezierTo(
+      size.width * 0.75,
+      size.height * 0.6,
+      size.width,
+      size.height * 0.2,
+    );
+    path.lineTo(size.width, size.height);
+    path.lineTo(0, size.height);
+    path.close();
+
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) =>
+      false;
+}
+
 int _toInt(dynamic v) {
   if (v is num) return v.toInt();
   if (v is String) return int.tryParse(v) ?? 0;

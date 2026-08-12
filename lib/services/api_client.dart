@@ -8,11 +8,11 @@ class ApiClient {
   //   flutter run --dart-define=API_URL=<url>/api/v1
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
+    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
+    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
@@ -121,15 +121,25 @@ class ApiClient {
     }
   }
 
-  // Ambil konfigurasi identitas tracking (default: akun uji AWALUDIN)
+  // Ambil konfigurasi identitas tracking (identitas murni dari hasil login —
+  // tidak ada default AWALUDIN lagi; 0 = belum terisi).
   static Future<Map<String, dynamic>> loadDriverConfig() async {
     final prefs = await SharedPreferences.getInstance();
     return {
-      'id_driver': prefs.getInt(_keyIdDriver) ?? 3,
-      'id_kendaraan': prefs.getInt(_keyIdKendaraan) ?? 2,
-      'id_ritase': prefs.getInt(_keyIdRitase) ?? 4,
-      'driver_name': prefs.getString(_keyDriverName) ?? 'AWALUDIN',
+      'id_driver': prefs.getInt(_keyIdDriver) ?? 0,
+      'id_kendaraan': prefs.getInt(_keyIdKendaraan) ?? 0,
+      'id_ritase': prefs.getInt(_keyIdRitase) ?? 0,
+      'driver_name': prefs.getString(_keyDriverName) ?? '',
     };
+  }
+
+  // Hapus konfigurasi identitas (dipanggil saat logout biar login berikutnya bersih).
+  static Future<void> clearDriverConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyIdDriver);
+    await prefs.remove(_keyIdKendaraan);
+    await prefs.remove(_keyIdRitase);
+    await prefs.remove(_keyDriverName);
   }
 
   /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
@@ -142,6 +152,43 @@ class ApiClient {
     }
   }
 
+  /// Helper POST auth — lempar pesan error dari backend biar bisa ditampilkan.
+  static Future<void> _postAuth(String path, Map<String, dynamic> data) async {
+    try {
+      await dio.post(path, data: data);
+    } on DioException catch (e) {
+      final body = e.response?.data;
+      final msg = (body is Map && body['message'] != null)
+          ? body['message'].toString()
+          : 'Terjadi kesalahan. Coba lagi.';
+      throw Exception(msg);
+    }
+  }
+
+  /// Lupa password (tanpa OTP) — verifikasi username + no_hp driver.
+  static Future<void> resetPassword({
+    required String username,
+    required String noHp,
+    required String newPassword,
+  }) async {
+    await _postAuth('/auth/reset-password', {
+      'username': username,
+      'no_hp': noHp,
+      'new_password': newPassword,
+    });
+  }
+
+  /// Ganti password (user yang sedang login).
+  static Future<void> changePassword({
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    await _postAuth('/auth/change-password', {
+      'old_password': oldPassword,
+      'new_password': newPassword,
+    });
+  }
+
   // Kirim data GPS tracking driver ke server (UPSERT: 1 posisi live per kendaraan)
   static Future<void> sendTrackingData({
     required double latitude,
@@ -151,10 +198,15 @@ class ApiClient {
     int koli = 0,
     int ecer = 0,
     int durasiDetik = 0,
-    int idDriver = 3,
-    int idKendaraan = 2,
+    int idDriver = 0,
+    int idKendaraan = 0,
     int idRitase = 0,
   }) async {
+    // Identitas belum terisi (belum login / config kosong) → jangan kirim data palsu.
+    if (idKendaraan <= 0) {
+      print('⚠️ [GPS TRACKING] Skip — id_kendaraan belum terisi (belum login).');
+      return;
+    }
     try {
       print(
         '📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli | Ecer: $ecer | Durasi: $durasiDetik dtk',
@@ -180,7 +232,30 @@ class ApiClient {
         '✅ [GPS TRACKING] Berhasil tersimpan di database Supabase: ${res.data}',
       );
     } catch (e) {
-      print('❌ [GPS TRACKING] Gagal mengirim: $e');
+      // Jaringan goyang → retry sekali setelah 15 detik (ambang offline backend = 3 mnt).
+      print('❌ [GPS TRACKING] Gagal kirim, retry 15s: $e');
+      await Future.delayed(const Duration(seconds: 15));
+      try {
+        await dio.post(
+          '/driver/tracking',
+          data: {
+            'id_ritase': idRitase,
+            'id_kendaraan': idKendaraan,
+            'id_driver': idDriver,
+            'latitude': latitude,
+            'longitude': longitude,
+            'kecepatan': speed,
+            'arah': 0,
+            'status': status,
+            'jumlah_koli': koli,
+            'jumlah_ecer': ecer,
+            'durasi_detik': durasiDetik,
+          },
+        );
+        print('✅ [GPS TRACKING] Berhasil setelah retry.');
+      } catch (e2) {
+        print('❌ [GPS TRACKING] Gagal juga setelah retry: $e2');
+      }
     }
   }
 

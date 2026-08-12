@@ -11,7 +11,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Tower Control Driver App',
+      title: 'MUSTGO',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -19,19 +19,21 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF0D47A1),
           primary: const Color(0xFF0D47A1),
-          secondary: const Color(0xFFFF8F00),
+          secondary: const Color(0xFFF27D26),
           surface: Colors.white,
         ),
         cardTheme: CardThemeData(
           color: Colors.white,
           surfaceTintColor: Colors.transparent,
-          elevation: 2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
         ),
         appBarTheme: const AppBarTheme(
           centerTitle: true,
           elevation: 0,
-          backgroundColor: Color(0xFF0D47A1),
+          backgroundColor: Color(0xFF0F172A),
           foregroundColor: Colors.white,
         ),
       ),

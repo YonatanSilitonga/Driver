@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/api_client.dart';
+import '../services/auth_service.dart';
+import '../services/background_tracking.dart';
 import 'login_screen.dart';
+import 'home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -72,28 +76,58 @@ class _SplashScreenState extends State<SplashScreen>
   void _navigateToLogin() {
     Future.delayed(const Duration(milliseconds: 250), () {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 700),
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const LoginScreen(),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                scale: Tween<double>(begin: 0.95, end: 1.0).animate(
-                  CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.easeOutCubic,
-                  ),
-                ),
-                child: child,
-              ),
-            );
-          },
-        ),
-      );
+      _goAfterSplash();
     });
+  }
+
+  /// Setelah splash: kalau masih ada sesi valid → langsung dashboard (auto-login),
+  /// selain itu → halaman login.
+  Future<void> _goAfterSplash() async {
+    if (!mounted) return;
+    Widget destination = const LoginScreen();
+
+    try {
+      final hasToken = await ApiClient.isLoggedIn();
+      if (hasToken) {
+        final user = await AuthService.me();
+        if (user != null) {
+          destination = const HomeScreen();
+          // Restart tracking kalau app pernah ditutup lewat "Keluar Aplikasi"
+          // (service di-stop saat keluar). No-op kalau service masih jalan.
+          try {
+            await startBackgroundTracking();
+          } catch (_) {}
+        } else {
+          // Token invalid/expired → bersihkan sesi & minta login ulang.
+          await ApiClient.clearToken();
+        }
+      }
+    } catch (_) {
+      // Jaringan bermasalah saat validasi — aman ke halaman login dulu.
+      await ApiClient.clearToken();
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 700),
+        pageBuilder: (context, animation, secondaryAnimation) => destination,
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.95, end: 1.0).animate(
+                CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                ),
+              ),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
