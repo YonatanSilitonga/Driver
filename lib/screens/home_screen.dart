@@ -76,11 +76,6 @@ enum TripStage {
     'Mengisi jumlah koli di [Nama Seller]',
     Icons.inventory_2_outlined,
   ),
-  leavingWarehouse(
-    'Keluar Gudang',
-    'Truk bergerak meninggalkan area [Nama Seller]',
-    Icons.local_shipping_outlined,
-  ),
   enRoute(
     'Menuju Seller',
     'Sedang dalam perjalanan menuju lokasi tujuan',
@@ -125,11 +120,14 @@ class _HomeScreenState extends State<HomeScreen> {
   String get _currentDestinationType =>
       _getJenisLokasi(_currentSeller?.jenisStop);
 
-  String get _previousLocationType {
-    if (_completedStops.isNotEmpty) {
-      return _getJenisLokasi(_completedStops.last.seller.jenisStop);
+  String get _originWarehouseName {
+    if (_allSellers.isNotEmpty) {
+      final firstStop = _allSellers.first;
+      if (firstStop.name.trim().isNotEmpty) {
+        return firstStop.name;
+      }
     }
-    return 'Gudang';
+    return 'Gudang Outgoing Utama';
   }
 
   List<dynamic> _vehicles = [];
@@ -177,7 +175,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _gpsTick = 0;
   double? _lastSentLat;
   double? _lastSentLng;
-  DateTime? _lastMovementTime;
   DateTime? _lastSentTime;
   DateTime? _prevFixTime;
   double? _prevLat;
@@ -252,10 +249,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (data != null && data['has_active_ritase'] == true) {
       final rawStops = data['stops'];
       final stops = rawStops is List ? rawStops : const <dynamic>[];
-      final filteredStops =
-          stops.where((s) => s is Map).toList();
-      final parsedSellers = filteredStops.map((item) {
-        final m = item as Map;
+      final parsedSellers = stops.whereType<Map>().map((m) {
         return SellerDummy(
           id: (m['id_stop'] ?? '').toString(),
           name: m['nama_lokasi']?.toString() ?? '',
@@ -409,7 +403,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     lngDiff > _moveThresholdDeg);
 
             if (moved) {
-              _lastMovementTime = now;
               final secSince =
                   now.difference(_lastSentTime!).inSeconds;
               if (secSince >= _movingSendSeconds) {
@@ -492,7 +485,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
     _lastSentTime = now;
-    _lastMovementTime = now;
     ApiClient.sendTrackingData(
       latitude: _latitude,
       longitude: _longitude,
@@ -511,12 +503,10 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (stage) {
       case TripStage.loadingGoods:
         return 'mulai_loading';
-      case TripStage.leavingWarehouse:
-        return 'berangkat_gudang';
       case TripStage.enRoute:
         return 'menuju_seller';
       case TripStage.arrived:
-        return 'sampai_gudang';
+        return 'tiba';
       case TripStage.completed:
         return 'selesai';
     }
@@ -524,16 +514,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String get _currentStageTitle {
     final currLoc = _currentDestinationType;
-    final prevLoc = _previousLocationType;
+    String? destName;
+    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+      destName = _allSellers[_completedStops.length + 1].name;
+    }
+
     switch (_currentStage) {
       case TripStage.loadingGoods:
         return 'Bongkar Muat Barang';
-      case TripStage.leavingWarehouse:
-        return 'Keluar $prevLoc';
       case TripStage.enRoute:
-        return 'Menuju ${_currentSeller?.name ?? currLoc}';
+        return 'Menuju ${destName ?? currLoc}';
       case TripStage.arrived:
-        return 'Tiba di ${_currentSeller?.name ?? currLoc}';
+        return 'Tiba di ${destName ?? currLoc}';
       case TripStage.completed:
         return 'Selesai';
     }
@@ -910,13 +902,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
       final inputKoli = int.tryParse(
-              _koliInputController.text.trim()) ??
-          _currentActualKoli;
+              _koliInputController.text.trim()) ?? 0;
       final inputEcer = int.tryParse(
-              _ecerInputController.text.trim()) ??
-          _currentActualEcer;
-      _currentActualKoli = inputKoli;
-      _currentActualEcer = inputEcer;
+              _ecerInputController.text.trim()) ?? 0;
+      _currentActualKoli += inputKoli;
+      _currentActualEcer += inputEcer;
     }
 
     final finishedStage = _currentStage;
@@ -931,9 +921,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
       switch (_currentStage) {
         case TripStage.loadingGoods:
-          _currentStage = TripStage.leavingWarehouse;
-          break;
-        case TripStage.leavingWarehouse:
           _currentStage = TripStage.enRoute;
           break;
         case TripStage.enRoute:
@@ -961,8 +948,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _currentStage = TripStage.loadingGoods;
             _currentStageDurations.clear();
             _currentActualAwb = 0;
-            _currentActualKoli = 0;
-            _currentActualEcer = 0;
+            // koli & ecer NOT reset — carry forward running total across stops
             _awbInputController.text = '0';
             _koliInputController.text = '0';
             _ecerInputController.text = '0';
@@ -975,6 +961,20 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
+    // Get location name for the finished stage
+    String? locationName = _currentSeller?.name;
+    if (finishedStage == TripStage.enRoute) {
+      if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+        locationName = _allSellers[_completedStops.length + 1].name;
+      }
+    } else if (finishedStage == TripStage.arrived) {
+      if (_allSellers.isNotEmpty && _completedStops.length < _allSellers.length) {
+        locationName = _allSellers[_completedStops.length].name;
+      }
+    } else if (finishedStage == TripStage.completed) {
+      locationName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
+    }
+
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
       status: _stageToStatusKey(finishedStage),
@@ -983,10 +983,10 @@ class _HomeScreenState extends State<HomeScreen> {
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
       durasiDetik: finishedDuration,
+      namaLokasi: locationName,
     );
 
-    _sendInstantTracking(
-        durasiDetik: finishedDuration, stage: finishedStage);
+    _sendInstantTracking(durasiDetik: finishedDuration);
   }
 
   Future<void> _finishEntireRoute() async {
@@ -1419,7 +1419,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ? Offset.zero
                   : const Offset(0, 0.1),
               duration: const Duration(milliseconds: 400),
-              child: const OriginCard(),
+              child: OriginCard(warehouseName: _originWarehouseName),
             ),
           ),
           const SizedBox(height: 12),
@@ -1471,8 +1471,6 @@ class _HomeScreenState extends State<HomeScreen> {
             _buildRitaseDoneCard()
           else ...[
             _buildTimelineStatusCard(),
-            const SizedBox(height: 12),
-            _buildGpsTrackingBanner(),
           ],
         ],
       ),
@@ -1629,111 +1627,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           elevation: 0,
         ),
-      ),
-    );
-  }
-
-  // ── GPS Tracking Banner ──
-  Widget _buildGpsTrackingBanner() {
-    final isActive =
-        _isTripStarted && !_isEntireRouteCompleted;
-    final now = DateTime.now();
-    final secSinceLastMove = _lastMovementTime != null
-        ? now.difference(_lastMovementTime!).inSeconds
-        : 0;
-    final isBatterySaver = isActive &&
-        secSinceLastMove >= _stationarySendSeconds &&
-        (_currentStage == TripStage.loadingGoods ||
-            _currentStage == TripStage.arrived);
-
-    final modeLabel = !isActive
-        ? 'Standby'
-        : (isBatterySaver
-            ? 'Hemat Baterai'
-            : 'Real-time');
-    final statusColor = !isActive
-        ? AppColors.textMuted
-        : (isBatterySaver
-            ? AppColors.orange
-            : AppColors.success);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.cardWhite,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: statusColor.withValues(alpha: 0.3),
-          width: 1.2,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              Icons.satellite_alt_rounded,
-              color: statusColor,
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Text(
-                      'GPS Tracking',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2),
-                      decoration: BoxDecoration(
-                        color: statusColor
-                            .withValues(alpha: 0.1),
-                        borderRadius:
-                            BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        modeLabel,
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: statusColor,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${_latitude.toStringAsFixed(5)}, ${_longitude.toStringAsFixed(5)} · ${_currentSpeedKmH} km/h',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontFamily: 'monospace',
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -2047,8 +1940,6 @@ class _HomeScreenState extends State<HomeScreen> {
     for (int seg = 0; seg < segmentCount; seg++) {
       final origin = _allSellers[seg];
       final destination = _allSellers[seg + 1];
-      final originType =
-          _getJenisLokasi(origin.jenisStop);
       final destType =
           _getJenisLokasi(destination.jenisStop);
 
@@ -2060,25 +1951,18 @@ class _HomeScreenState extends State<HomeScreen> {
         stageIndex: 0,
       ));
       steps.add(_TimelineStep(
-        title: 'Keluar dari ${origin.name}',
-        subtitle: 'Meninggalkan $originType',
-        icon: Icons.local_shipping_outlined,
-        segIndex: seg,
-        stageIndex: 1,
-      ));
-      steps.add(_TimelineStep(
         title: 'Menuju ${destination.name}',
         subtitle: 'Perjalanan ke $destType',
         icon: Icons.navigation_outlined,
         segIndex: seg,
-        stageIndex: 2,
+        stageIndex: 1,
       ));
       steps.add(_TimelineStep(
         title: 'Tiba di ${destination.name}',
         subtitle: 'Sampai di $destType',
         icon: Icons.location_on_outlined,
         segIndex: seg,
-        stageIndex: 3,
+        stageIndex: 2,
       ));
     }
 
@@ -2094,7 +1978,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_currentStage == TripStage.completed) {
       currentGlobal = steps.length - 1;
     } else {
-      currentGlobal = _completedStops.length * 4 +
+      currentGlobal = _completedStops.length * 3 +
           _currentStage.index;
     }
 
@@ -2541,18 +2425,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _getNextStageButtonLabel() {
-    final currLoc = _currentDestinationType;
+    String? destName;
+    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+      destName = _allSellers[_completedStops.length + 1].name;
+    }
+
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Muat Selesai → Keluar';
-      case TripStage.leavingWarehouse:
-        return 'Berangkat → Menuju $currLoc';
+        return 'Selesai Loading → Berangkat';
       case TripStage.enRoute:
-        return 'Tiba di Lokasi';
+        return 'Sudah Tiba di ${destName ?? 'Lokasi'}';
       case TripStage.arrived:
-        return 'Selesaikan di $currLoc';
+        return 'Mulai Bongkar Muat';
       case TripStage.completed:
-        return 'Selesai';
+        return 'Selesai Perjalanan';
     }
   }
 

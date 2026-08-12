@@ -8,11 +8,11 @@ class ApiClient {
   //   flutter run --dart-define=API_URL=<url>/api/v1
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
@@ -20,7 +20,7 @@ class ApiClient {
   static String _activeBaseUrl = _defaultUrl;
 
   static Dio get dio {
-    _dio ??= _createDio();  
+    _dio ??= _createDio();
     return _dio!;
   }
 
@@ -33,7 +33,8 @@ class ApiClient {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true', // Wajib untuk API via Ngrok Free
+          'ngrok-skip-browser-warning':
+              'true', // Wajib untuk API via Ngrok Free
         },
       ),
     );
@@ -204,7 +205,9 @@ class ApiClient {
   }) async {
     // Identitas belum terisi (belum login / config kosong) → jangan kirim data palsu.
     if (idKendaraan <= 0) {
-      print('⚠️ [GPS TRACKING] Skip — id_kendaraan belum terisi (belum login).');
+      print(
+        '⚠️ [GPS TRACKING] Skip — id_kendaraan belum terisi (belum login).',
+      );
       return;
     }
     try {
@@ -268,14 +271,18 @@ class ApiClient {
     int koli = 0,
     int ecer = 0,
     int durasiDetik = 0,
+    String? namaLokasi,
   }) async {
     final targetId = idRitase > 0 ? idRitase : 4;
     try {
-      print('📤 [STATUS] Update $targetId -> $status | Koli: $koli | Ecer: $ecer ($durasiDetik dtk)');
+      print(
+        '📤 [STATUS] Update $targetId -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer ($durasiDetik dtk)',
+      );
       final res = await dio.post(
         '/armada/ritase/$targetId/status',
         data: {
           'status': status,
+          'nama_lokasi': namaLokasi,
           'latitude': latitude,
           'longitude': longitude,
           'jumlah_koli': koli,
@@ -333,12 +340,15 @@ class ApiClient {
   }
 
   // Ambil ritase aktif berdasarkan driver dan kendaraan
-  static Future<Map<String, dynamic>?> fetchActiveRitase(int idDriver, int idKendaraan) async {
+  static Future<Map<String, dynamic>?> fetchActiveRitase(
+    int idDriver,
+    int idKendaraan,
+  ) async {
     try {
-      final response = await dio.get('/driver/active-ritase', queryParameters: {
-        'id_driver': idDriver,
-        'id_kendaraan': idKendaraan,
-      });
+      final response = await dio.get(
+        '/driver/active-ritase',
+        queryParameters: {'id_driver': idDriver, 'id_kendaraan': idKendaraan},
+      );
 
       final body = response.data;
       if (body is Map && body['success'] == true) {
@@ -368,12 +378,15 @@ class ApiClient {
   }
 
   // Mulai perjalanan bebas
-  static Future<Map<String, dynamic>?> startFreeTrip(int idDriver, int idKendaraan) async {
+  static Future<Map<String, dynamic>?> startFreeTrip(
+    int idDriver,
+    int idKendaraan,
+  ) async {
     try {
-      final response = await dio.post('/driver/start-free-trip', data: {
-        'id_driver': idDriver,
-        'id_kendaraan': idKendaraan,
-      });
+      final response = await dio.post(
+        '/driver/start-free-trip',
+        data: {'id_driver': idDriver, 'id_kendaraan': idKendaraan},
+      );
       if (response.data != null && response.data['success'] == true) {
         return response.data['data'];
       }
@@ -384,12 +397,15 @@ class ApiClient {
   }
 
   // Tambahkan stop/lokasi baru ke perjalanan aktif
-  static Future<Map<String, dynamic>?> addStop(int idRitase, int idSeller) async {
+  static Future<Map<String, dynamic>?> addStop(
+    int idRitase,
+    int idSeller,
+  ) async {
     try {
-      final response = await dio.post('/driver/add-stop', data: {
-        'id_ritase': idRitase,
-        'id_seller': idSeller,
-      });
+      final response = await dio.post(
+        '/driver/add-stop',
+        data: {'id_ritase': idRitase, 'id_seller': idSeller},
+      );
       if (response.data != null && response.data['success'] == true) {
         return response.data['data'];
       }
