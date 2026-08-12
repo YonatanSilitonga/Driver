@@ -141,12 +141,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final List<CompletedStop> _completedStops = [];
 
-  final TextEditingController _awbInputController =
-      TextEditingController(text: '0');
-  final TextEditingController _koliInputController =
-      TextEditingController(text: '0');
-  final TextEditingController _ecerInputController =
-      TextEditingController(text: '0');
+  final TextEditingController _awbInputController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _koliInputController = TextEditingController(
+    text: '0',
+  );
+  final TextEditingController _ecerInputController = TextEditingController(
+    text: '0',
+  );
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
@@ -242,8 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _isTripStarted = false;
     });
 
-    final data =
-        await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
+    final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
     if (!mounted) return;
 
     if (data != null && data['has_active_ritase'] == true) {
@@ -294,8 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _ensureLocationPermission() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      _showSnack(
-          'Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
+      _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
       return;
     }
     var permission = await Geolocator.checkPermission();
@@ -307,8 +308,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     if (permission == LocationPermission.deniedForever) {
-      _showSnack(
-          'Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
+      _showSnack('Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
       return;
     }
     await _refreshLocation();
@@ -378,8 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _startTimer() {
     _stopwatchTimer?.cancel();
-    _stopwatchTimer =
-        Timer.periodic(const Duration(seconds: 1), (timer) {
+    _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
       setState(() {
         if (_isTripStarted && !_isEntireRouteCompleted) {
@@ -398,19 +397,17 @@ class _HomeScreenState extends State<HomeScreen> {
           } else {
             final latDiff = (_latitude - _lastSentLat!).abs();
             final lngDiff = (_longitude - _lastSentLng!).abs();
-            final moved = _currentSpeedKmH > _speedThresholdKmh ||
-                (latDiff > _moveThresholdDeg ||
-                    lngDiff > _moveThresholdDeg);
+            final moved =
+                _currentSpeedKmH > _speedThresholdKmh ||
+                (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
 
             if (moved) {
-              final secSince =
-                  now.difference(_lastSentTime!).inSeconds;
+              final secSince = now.difference(_lastSentTime!).inSeconds;
               if (secSince >= _movingSendSeconds) {
                 _sendInstantTracking(speed: _currentSpeedKmH);
               }
             } else {
-              final secSince =
-                  now.difference(_lastSentTime!).inSeconds;
+              final secSince = now.difference(_lastSentTime!).inSeconds;
               if (secSince >= _stationarySendSeconds) {
                 _lastSentLat = _latitude;
                 _lastSentLng = _longitude;
@@ -474,6 +471,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     _startTimer();
     _sendInstantTracking();
+    ApiClient.sendStatusUpdate(
+      idRitase: _idRitase,
+      status: 'mulai_loading',
+      latitude: _latitude,
+      longitude: _longitude,
+      koli: _currentActualKoli,
+      ecer: _currentActualEcer,
+      durasiDetik: 0,
+      namaLokasi: seller.name,
+    );
   }
 
   void _sendInstantTracking({
@@ -485,17 +492,29 @@ class _HomeScreenState extends State<HomeScreen> {
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
     _lastSentTime = now;
+    final targetStage = stage ?? _currentStage;
+    String? locName = _currentSeller?.name;
+    if (targetStage == TripStage.enRoute || targetStage == TripStage.arrived) {
+      if (_allSellers.isNotEmpty &&
+          _completedStops.length + 1 < _allSellers.length) {
+        locName = _allSellers[_completedStops.length + 1].name;
+      }
+    } else if (targetStage == TripStage.completed) {
+      locName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
+    }
+
     ApiClient.sendTrackingData(
       latitude: _latitude,
       longitude: _longitude,
       speed: speed ?? _currentSpeedKmH,
-      status: _stageToStatusKey(stage ?? _currentStage),
+      status: _stageToStatusKey(targetStage),
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
       durasiDetik: durasiDetik,
       idDriver: _idDriver,
       idKendaraan: _idKendaraan,
       idRitase: _idRitase,
+      namaLokasi: locName,
     );
   }
 
@@ -515,7 +534,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String get _currentStageTitle {
     final currLoc = _currentDestinationType;
     String? destName;
-    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+    if (_allSellers.isNotEmpty &&
+        _completedStops.length + 1 < _allSellers.length) {
       destName = _allSellers[_completedStops.length + 1].name;
     }
 
@@ -535,8 +555,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius:
-            BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (BuildContext ctx) {
         return Container(
@@ -546,8 +565,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               const Text(
                 'Pilih Kendaraan Anda',
-                style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
               if (_vehicles.isEmpty)
@@ -564,31 +582,26 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (v is! Map) {
                         return const ListTile(title: Text('-'));
                       }
-                      final isSelected =
-                          _idKendaraan == v['id'];
+                      final isSelected = _idKendaraan == v['id'];
                       return ListTile(
                         leading: Icon(
                           Icons.local_shipping,
-                          color: isSelected
-                              ? AppColors.navy
-                              : Colors.grey,
+                          color: isSelected ? AppColors.navy : Colors.grey,
                         ),
-                        title: Text(
-                            v['plat']?.toString() ?? '-'),
-                        subtitle: Text(
-                            '${v['type']} - ${v['capacity_kg']}kg'),
+                        title: Text(v['plat']?.toString() ?? '-'),
+                        subtitle: Text('${v['type']} - ${v['capacity_kg']}kg'),
                         trailing: isSelected
-                            ? const Icon(Icons.check_circle,
-                                color: AppColors.navy)
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: AppColors.navy,
+                              )
                             : null,
                         onTap: () async {
                           Navigator.pop(ctx);
                           setState(() {
                             _idKendaraan = _toInt(v['id']);
-                            _selectedVehiclePlat =
-                                v['plat']?.toString();
-                            _selectedVehicleType =
-                                v['type']?.toString();
+                            _selectedVehiclePlat = v['plat']?.toString();
+                            _selectedVehicleType = v['type']?.toString();
                           });
                           await ApiClient.saveDriverConfig(
                             idDriver: _idDriver,
@@ -620,11 +633,11 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (dialogCtx, setDialogState) {
           return AlertDialog(
             shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+              borderRadius: BorderRadius.circular(16),
+            ),
             title: const Text(
               'Ganti Password',
-              style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             content: SingleChildScrollView(
               child: Column(
@@ -662,13 +675,14 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: loading
-                    ? null
-                    : () => Navigator.pop(dialogCtx),
-                child: const Text('Batal',
-                    style: TextStyle(
-                        color: Colors.grey,
-                        fontWeight: FontWeight.bold)),
+                onPressed: loading ? null : () => Navigator.pop(dialogCtx),
+                child: const Text(
+                  'Batal',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               ElevatedButton(
                 onPressed: loading
@@ -678,26 +692,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         final newP = newCtrl.text;
                         final conf = confirmCtrl.text;
                         String? err;
-                        if (old.isEmpty ||
-                            newP.isEmpty) {
+                        if (old.isEmpty || newP.isEmpty) {
                           err = 'Semua field wajib diisi.';
                         } else if (newP.length < 6) {
-                          err =
-                              'Password baru minimal 6 karakter.';
+                          err = 'Password baru minimal 6 karakter.';
                         } else if (newP != conf) {
-                          err =
-                              'Konfirmasi password tidak sama.';
+                          err = 'Konfirmasi password tidak sama.';
                         }
                         if (err != null) {
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(SnackBar(
-                                  content: Text(err),
-                                  backgroundColor:
-                                      Colors.red));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(err),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
                           return;
                         }
-                        setDialogState(
-                            () => loading = true);
+                        setDialogState(() => loading = true);
                         try {
                           await ApiClient.changePassword(
                             oldPassword: old,
@@ -706,26 +717,24 @@ class _HomeScreenState extends State<HomeScreen> {
                           if (!dialogCtx.mounted) return;
                           Navigator.pop(dialogCtx);
                           if (!mounted) return;
-                          ScaffoldMessenger.of(context)
-                              .showSnackBar(
+                          ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                  'Password berhasil diubah. Silakan login ulang.'),
-                              backgroundColor:
-                                  AppColors.navy,
+                                'Password berhasil diubah. Silakan login ulang.',
+                              ),
+                              backgroundColor: AppColors.navy,
                             ),
                           );
                           await _forceRelogin();
                         } catch (e) {
                           if (!dialogCtx.mounted) return;
-                          setDialogState(
-                              () => loading = false);
-                          ScaffoldMessenger.of(dialogCtx)
-                              .showSnackBar(SnackBar(
-                                  content:
-                                      Text(e.toString()),
-                                  backgroundColor:
-                                      Colors.red));
+                          setDialogState(() => loading = false);
+                          ScaffoldMessenger.of(dialogCtx).showSnackBar(
+                            SnackBar(
+                              content: Text(e.toString()),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
                         }
                       },
                 style: ElevatedButton.styleFrom(
@@ -736,16 +745,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child:
-                            CircularProgressIndicator(
+                        child: CircularProgressIndicator(
                           strokeWidth: 2,
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Simpan',
-                        style: TextStyle(
-                            fontWeight:
-                                FontWeight.bold)),
+                    : const Text(
+                        'Simpan',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
               ),
             ],
           );
@@ -779,39 +787,40 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (dialogCtx) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
-              Icon(Icons.logout_rounded,
-                  color: AppColors.error),
+              Icon(Icons.logout_rounded, color: AppColors.error),
               SizedBox(width: 8),
-              Text('Konfirmasi Logout',
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold)),
+              Text(
+                'Konfirmasi Logout',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
-          content: const Text(
-              'Apakah Anda yakin ingin keluar dari akun ini?'),
+          content: const Text('Apakah Anda yakin ingin keluar dari akun ini?'),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.pop(dialogCtx, false),
-              child: const Text('Batal',
-                  style: TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold)),
+              onPressed: () => Navigator.pop(dialogCtx, false),
+              child: const Text(
+                'Batal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
             ElevatedButton(
-              onPressed: () =>
-                  Navigator.pop(dialogCtx, true),
+              onPressed: () => Navigator.pop(dialogCtx, true),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.error,
                 foregroundColor: Colors.white,
               ),
-              child: const Text('Keluar',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Keluar',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -840,29 +849,33 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
-              Icon(Icons.help_outline_rounded,
-                  color: AppColors.orange, size: 26),
+              Icon(
+                Icons.help_outline_rounded,
+                color: AppColors.orange,
+                size: 26,
+              ),
               SizedBox(width: 8),
-              Text('Konfirmasi Status',
-                  style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold)),
+              Text(
+                'Konfirmasi Status',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           content: Text.rich(
             TextSpan(
               text: 'Status ke:\n\n',
-              style: const TextStyle(
-                  fontSize: 14, color: Colors.black87),
+              style: const TextStyle(fontSize: 14, color: Colors.black87),
               children: [
                 TextSpan(
                   text: _getNextStageButtonLabel(),
                   style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.navy),
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.navy,
+                  ),
                 ),
                 const TextSpan(text: '?'),
               ],
@@ -870,12 +883,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(),
-              child: const Text('Batal',
-                  style: TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold)),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Batal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () {
@@ -889,9 +904,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: const Text('Ya, Lanjutkan',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Ya, Lanjutkan',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -901,22 +917,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _nextStage() {
     if (_currentStage == TripStage.loadingGoods) {
-      final inputKoli = int.tryParse(
-              _koliInputController.text.trim()) ?? 0;
-      final inputEcer = int.tryParse(
-              _ecerInputController.text.trim()) ?? 0;
+      final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? 0;
+      final inputEcer = int.tryParse(_ecerInputController.text.trim()) ?? 0;
       _currentActualKoli += inputKoli;
       _currentActualEcer += inputEcer;
     }
 
     final finishedStage = _currentStage;
     final finishedDuration =
-        _currentStageDurations[finishedStage] ??
-            _activeStageSeconds;
+        _currentStageDurations[finishedStage] ?? _activeStageSeconds;
 
     setState(() {
-      _currentStageDurations[_currentStage] =
-          _activeStageSeconds;
+      _currentStageDurations[_currentStage] = _activeStageSeconds;
       _activeStageSeconds = 0;
 
       switch (_currentStage) {
@@ -928,23 +940,24 @@ class _HomeScreenState extends State<HomeScreen> {
           break;
         case TripStage.arrived:
           if (_currentSeller != null) {
-            final stopTotalDuration =
-                _currentStageDurations.values
-                    .fold(0, (sum, dur) => sum + dur);
-            _completedStops.add(CompletedStop(
-              seller: _currentSeller!,
-              actualAwb: _currentActualAwb,
-              actualKoli: _currentActualKoli,
-              actualEcer: _currentActualEcer,
-              totalDurationSeconds: stopTotalDuration,
-              stageDurations:
-                  Map.from(_currentStageDurations),
-            ));
+            final stopTotalDuration = _currentStageDurations.values.fold(
+              0,
+              (sum, dur) => sum + dur,
+            );
+            _completedStops.add(
+              CompletedStop(
+                seller: _currentSeller!,
+                actualAwb: _currentActualAwb,
+                actualKoli: _currentActualKoli,
+                actualEcer: _currentActualEcer,
+                totalDurationSeconds: stopTotalDuration,
+                stageDurations: Map.from(_currentStageDurations),
+              ),
+            );
           }
           final nextOriginIndex = _completedStops.length;
           if (nextOriginIndex < _allSellers.length - 1) {
-            _currentSeller =
-                _allSellers[nextOriginIndex];
+            _currentSeller = _allSellers[nextOriginIndex];
             _currentStage = TripStage.loadingGoods;
             _currentStageDurations.clear();
             _currentActualAwb = 0;
@@ -961,23 +974,20 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
 
-    // Get location name for the finished stage
+    // Determine location name for the NEW stage (_currentStage)
     String? locationName = _currentSeller?.name;
-    if (finishedStage == TripStage.enRoute) {
-      if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+    if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
+      if (_allSellers.isNotEmpty &&
+          _completedStops.length + 1 < _allSellers.length) {
         locationName = _allSellers[_completedStops.length + 1].name;
       }
-    } else if (finishedStage == TripStage.arrived) {
-      if (_allSellers.isNotEmpty && _completedStops.length < _allSellers.length) {
-        locationName = _allSellers[_completedStops.length].name;
-      }
-    } else if (finishedStage == TripStage.completed) {
+    } else if (_currentStage == TripStage.completed) {
       locationName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
     }
 
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
-      status: _stageToStatusKey(finishedStage),
+      status: _stageToStatusKey(_currentStage),
       latitude: _latitude,
       longitude: _longitude,
       koli: _currentActualKoli,
@@ -993,11 +1003,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final wasLast = _isLastRitase;
     _stopTimer();
 
-    final success =
-        await ApiClient.finishRitase(_idRitase);
+    final success = await ApiClient.finishRitase(_idRitase);
     if (!success) {
-      _showSnack(
-          'Gagal menyelesaikan ritase di server');
+      _showSnack('Gagal menyelesaikan ritase di server');
       return;
     }
 
@@ -1025,8 +1033,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _isEntireRouteCompleted = true;
       });
-      _showSnack(
-          'Seluruh jadwal hari ini telah selesai!');
+      _showSnack('Seluruh jadwal hari ini telah selesai!');
     }
   }
 
@@ -1050,31 +1057,32 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
-              Icon(Icons.arrow_back,
-                  color: AppColors.navy, size: 24),
+              Icon(Icons.arrow_back, color: AppColors.navy, size: 24),
               SizedBox(width: 8),
-              Text('Kembali ke Beranda',
-                  style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold)),
+              Text(
+                'Kembali ke Beranda',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           content: const Text(
             'Perjalanan saat ini akan dihentikan.',
-            style: TextStyle(
-                fontSize: 14, color: Colors.black87),
+            style: TextStyle(fontSize: 14, color: Colors.black87),
           ),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(),
-              child: const Text('Batal',
-                  style: TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold)),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Batal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () {
@@ -1085,13 +1093,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 backgroundColor: AppColors.navy,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius:
-                      BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: const Text('Ya, Kembali',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Ya, Kembali',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -1105,31 +1113,32 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Row(
             children: [
-              Icon(Icons.logout,
-                  color: AppColors.navy, size: 24),
+              Icon(Icons.logout, color: AppColors.navy, size: 24),
               SizedBox(width: 8),
-              Text('Keluar Aplikasi',
-                  style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.bold)),
+              Text(
+                'Keluar Aplikasi',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           content: const Text(
             'Yakin mau keluar dari aplikasi?',
-            style: TextStyle(
-                fontSize: 14, color: Colors.black87),
+            style: TextStyle(fontSize: 14, color: Colors.black87),
           ),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(),
-              child: const Text('Batal',
-                  style: TextStyle(
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold)),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Batal',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
             ElevatedButton(
               onPressed: () async {
@@ -1149,13 +1158,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 backgroundColor: AppColors.navy,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                  borderRadius:
-                      BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: const Text('Keluar',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Keluar',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
@@ -1189,16 +1198,13 @@ class _HomeScreenState extends State<HomeScreen> {
           },
           color: AppColors.navy,
           child: CustomScrollView(
-            physics:
-                const AlwaysScrollableScrollPhysics(),
+            physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
               // ── Header ──
               _buildHeader(),
               // ── Body ──
               SliverToBoxAdapter(
-                child: _isTripStarted
-                    ? _buildTripBody()
-                    : _buildHomeBody(),
+                child: _isTripStarted ? _buildTripBody() : _buildHomeBody(),
               ),
             ],
           ),
@@ -1212,9 +1218,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return SliverToBoxAdapter(
       child: Container(
         width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: AppColors.navyGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.navyGradient),
         child: Stack(
           children: [
             // Wave background
@@ -1223,8 +1227,7 @@ class _HomeScreenState extends State<HomeScreen> {
               left: 0,
               right: 0,
               child: CustomPaint(
-                size: Size(
-                    MediaQuery.of(context).size.width, 20),
+                size: Size(MediaQuery.of(context).size.width, 20),
                 painter: _WavePainter(),
               ),
             ),
@@ -1255,23 +1258,19 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
-                  if (_isTripStarted)
-                    const SizedBox(width: 10),
+                  if (_isTripStarted) const SizedBox(width: 10),
                   // Logo
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.white
-                          .withValues(alpha: 0.15),
-                      borderRadius:
-                          BorderRadius.circular(12),
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Image.asset(
                       'assets/images/logo_mustgo.png',
                       width: 36,
                       height: 36,
-                      errorBuilder:
-                          (context, error, stack) {
+                      errorBuilder: (context, error, stack) {
                         return const Icon(
                           Icons.local_shipping_rounded,
                           size: 32,
@@ -1284,8 +1283,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   // Sapaan
                   Expanded(
                     child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           'Hai, $_driverName!',
@@ -1302,8 +1300,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               : 'Siap bertugas hari ini?',
                           style: TextStyle(
                             fontSize: 13,
-                            color: Colors.white
-                                .withValues(alpha: 0.7),
+                            color: Colors.white.withValues(alpha: 0.7),
                           ),
                         ),
                       ],
@@ -1316,13 +1313,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       width: 100,
                       height: 60,
                       fit: BoxFit.contain,
-                      errorBuilder:
-                          (context, error, stack) {
+                      errorBuilder: (context, error, stack) {
                         return Icon(
                           Icons.local_shipping_rounded,
                           size: 48,
-                          color: Colors.white
-                              .withValues(alpha: 0.3),
+                          color: Colors.white.withValues(alpha: 0.3),
                         );
                       },
                     ),
@@ -1330,14 +1325,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   PopupMenuButton<String>(
                     icon: Icon(
                       Icons.more_vert_rounded,
-                      color: Colors.white
-                          .withValues(alpha: 0.9),
+                      color: Colors.white.withValues(alpha: 0.9),
                     ),
                     color: Colors.white,
                     elevation: 4,
                     shape: RoundedRectangleBorder(
-                      borderRadius:
-                          BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     onSelected: (value) {
                       if (value == 'password') {
@@ -1352,8 +1345,11 @@ class _HomeScreenState extends State<HomeScreen> {
                         height: 44,
                         child: Row(
                           children: [
-                            Icon(Icons.lock_reset_rounded,
-                                size: 18, color: AppColors.navy),
+                            Icon(
+                              Icons.lock_reset_rounded,
+                              size: 18,
+                              color: AppColors.navy,
+                            ),
                             SizedBox(width: 10),
                             Text('Ganti Password'),
                           ],
@@ -1364,12 +1360,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         height: 44,
                         child: Row(
                           children: [
-                            Icon(Icons.logout_rounded,
-                                size: 18, color: AppColors.error),
+                            Icon(
+                              Icons.logout_rounded,
+                              size: 18,
+                              color: AppColors.error,
+                            ),
                             SizedBox(width: 10),
-                            Text('Logout',
-                                style: TextStyle(
-                                    color: AppColors.error)),
+                            Text(
+                              'Logout',
+                              style: TextStyle(color: AppColors.error),
+                            ),
                           ],
                         ),
                       ),
@@ -1396,13 +1396,10 @@ class _HomeScreenState extends State<HomeScreen> {
             opacity: _cardVisible[0] ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 400),
             child: AnimatedSlide(
-              offset: _cardVisible[0]
-                  ? Offset.zero
-                  : const Offset(0, 0.1),
+              offset: _cardVisible[0] ? Offset.zero : const Offset(0, 0.1),
               duration: const Duration(milliseconds: 400),
               child: VehicleCard(
-                plat:
-                    _selectedVehiclePlat ?? 'B 9806 UXV',
+                plat: _selectedVehiclePlat ?? 'B 9806 UXV',
                 type: _selectedVehicleType ?? 'CDDL',
                 capacity: '7.000 kg',
                 onTap: _showVehicleSelection,
@@ -1415,9 +1412,7 @@ class _HomeScreenState extends State<HomeScreen> {
             opacity: _cardVisible[1] ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 400),
             child: AnimatedSlide(
-              offset: _cardVisible[1]
-                  ? Offset.zero
-                  : const Offset(0, 0.1),
+              offset: _cardVisible[1] ? Offset.zero : const Offset(0, 0.1),
               duration: const Duration(milliseconds: 400),
               child: OriginCard(warehouseName: _originWarehouseName),
             ),
@@ -1431,9 +1426,7 @@ class _HomeScreenState extends State<HomeScreen> {
               opacity: _cardVisible[2] ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 400),
               child: AnimatedSlide(
-                offset: _cardVisible[2]
-                    ? Offset.zero
-                    : const Offset(0, 0.1),
+                offset: _cardVisible[2] ? Offset.zero : const Offset(0, 0.1),
                 duration: const Duration(milliseconds: 400),
                 child: _buildStartButton(),
               ),
@@ -1456,8 +1449,7 @@ class _HomeScreenState extends State<HomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Current destination
-          if (_currentSeller != null &&
-              !_isEntireRouteCompleted)
+          if (_currentSeller != null && !_isEntireRouteCompleted)
             _buildActiveTripSellerCard(),
           const SizedBox(height: 12),
           // Completed history
@@ -1486,13 +1478,13 @@ class _HomeScreenState extends State<HomeScreen> {
         color: AppColors.cardWhite,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color: AppColors.success.withValues(alpha: 0.3),
-            width: 2),
+          color: AppColors.success.withValues(alpha: 0.3),
+          width: 2,
+        ),
       ),
       child: Column(
         children: [
-          const Icon(Icons.check_circle,
-              color: AppColors.success, size: 48),
+          const Icon(Icons.check_circle, color: AppColors.success, size: 48),
           const SizedBox(height: 10),
           Text(
             'Semua ${_completedStops.length} titik stop selesai!',
@@ -1515,12 +1507,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     : Icons.arrow_forward,
               ),
               label: Text(
-                _isLastRitase
-                    ? 'Selesai'
-                    : 'Selesaikan & Lanjut Rute',
+                _isLastRitase ? 'Selesai' : 'Selesaikan & Lanjut Rute',
                 style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold),
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isLastRitase
@@ -1551,11 +1542,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Column(
         children: [
-          Icon(
-            Icons.route_outlined,
-            size: 48,
-            color: AppColors.textMuted,
-          ),
+          Icon(Icons.route_outlined, size: 48, color: AppColors.textMuted),
           const SizedBox(height: 12),
           const Text(
             'Belum ada rute hari ini',
@@ -1568,10 +1555,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 4),
           const Text(
             'Tunggu penugasan dari admin',
-            style: TextStyle(
-              fontSize: 13,
-              color: AppColors.textMuted,
-            ),
+            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
@@ -1579,13 +1563,13 @@ class _HomeScreenState extends State<HomeScreen> {
               await _fetchActiveRitase();
             },
             icon: const Icon(Icons.refresh, size: 18),
-            label: const Text('Refresh',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold)),
+            label: const Text(
+              'Refresh',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.navy,
-              side:
-                  const BorderSide(color: AppColors.navy),
+              side: const BorderSide(color: AppColors.navy),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -1610,14 +1594,10 @@ class _HomeScreenState extends State<HomeScreen> {
             _startTripDirectly(_allSellers.first);
           }
         },
-        icon: const Icon(Icons.play_arrow_rounded,
-            size: 26),
+        icon: const Icon(Icons.play_arrow_rounded, size: 26),
         label: const Text(
           'Mulai Perjalanan',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.orange,
@@ -1643,11 +1623,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (seller.jenisStop == 'gudang') {
       badgeText = 'GUDANG — $currentStopNum/$totalStops';
     } else if (seller.jenisStop == 'drop_point') {
-      badgeText =
-          'GATEWAY — $currentStopNum/$totalStops';
+      badgeText = 'GATEWAY — $currentStopNum/$totalStops';
     } else {
-      badgeText =
-          'SELLER — $currentStopNum/$totalStops';
+      badgeText = 'SELLER — $currentStopNum/$totalStops';
     }
 
     return Container(
@@ -1656,17 +1634,14 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: AppColors.navy.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.navy.withValues(alpha: 0.25),
-        ),
+        border: Border.all(color: AppColors.navy.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Badge
           Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: AppColors.orange,
               borderRadius: BorderRadius.circular(6),
@@ -1686,21 +1661,18 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             children: List.generate(totalStops, (i) {
               final isDone = i < _completedStops.length;
-              final isCurrent =
-                  i == _completedStops.length;
+              final isCurrent = i == _completedStops.length;
               return Expanded(
                 child: Container(
-                  margin: const EdgeInsets.symmetric(
-                      horizontal: 2),
+                  margin: const EdgeInsets.symmetric(horizontal: 2),
                   height: 5,
                   decoration: BoxDecoration(
                     color: isDone
                         ? AppColors.success
                         : isCurrent
-                            ? AppColors.orange
-                            : AppColors.borderLight,
-                    borderRadius:
-                        BorderRadius.circular(3),
+                        ? AppColors.orange
+                        : AppColors.borderLight,
+                    borderRadius: BorderRadius.circular(3),
                   ),
                 ),
               );
@@ -1740,16 +1712,14 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: AppColors.cardWhite,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-            color: AppColors.success.withValues(alpha: 0.3)),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.verified,
-                  color: AppColors.success, size: 18),
+              const Icon(Icons.verified, color: AppColors.success, size: 18),
               const SizedBox(width: 8),
               Text(
                 'Selesai (${_completedStops.length})',
@@ -1795,32 +1765,31 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           stop.seller.name,
                           style: const TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 12,
-                            color:
-                                AppColors.textPrimary,
+                            color: AppColors.textPrimary,
                           ),
                         ),
                         Text(
                           '${stop.actualKoli} koli · ${stop.actualEcer} ecer · ${_formatReadableDuration(stop.totalDurationSeconds)}',
                           style: TextStyle(
                             fontSize: 10,
-                            color: AppColors
-                                .textSecondary,
+                            color: AppColors.textSecondary,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.done_all,
-                      color: AppColors.success,
-                      size: 16),
+                  const Icon(
+                    Icons.done_all,
+                    color: AppColors.success,
+                    size: 16,
+                  ),
                 ],
               ),
             );
@@ -1844,8 +1813,7 @@ class _HomeScreenState extends State<HomeScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment:
-                MainAxisAlignment.spaceBetween,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
                 'Status Perjalanan',
@@ -1855,27 +1823,26 @@ class _HomeScreenState extends State<HomeScreen> {
                   color: AppColors.textPrimary,
                 ),
               ),
-              if (_currentStage !=
-                  TripStage.completed)
+              if (_currentStage != TripStage.completed)
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
-                    color: AppColors.navy
-                        .withValues(alpha: 0.08),
-                    borderRadius:
-                        BorderRadius.circular(6),
+                    color: AppColors.navy.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(
                     children: [
                       const Icon(
-                          Icons.hourglass_top,
-                          size: 12,
-                          color: AppColors.navy),
+                        Icons.hourglass_top,
+                        size: 12,
+                        color: AppColors.navy,
+                      ),
                       const SizedBox(width: 4),
                       Text(
-                        _formatDuration(
-                            _activeStageSeconds),
+                        _formatDuration(_activeStageSeconds),
                         style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 11,
@@ -1892,23 +1859,19 @@ class _HomeScreenState extends State<HomeScreen> {
           // Timeline
           _buildTimeline(),
           // Input form during loading
-          if (_currentStage ==
-              TripStage.loadingGoods) ...[
+          if (_currentStage == TripStage.loadingGoods) ...[
             const SizedBox(height: 12),
             _buildDriverFriendlyInputForm(),
           ],
           const SizedBox(height: 12),
           // Next stage button
-          if (_currentStage !=
-              TripStage.completed)
+          if (_currentStage != TripStage.completed)
             SizedBox(
               width: double.infinity,
               height: 48,
               child: ElevatedButton.icon(
                 onPressed: _confirmAndNextStage,
-                icon: const Icon(
-                    Icons.navigation_outlined,
-                    size: 20),
+                icon: const Icon(Icons.navigation_outlined, size: 20),
                 label: Text(
                   _getNextStageButtonLabel(),
                   style: const TextStyle(
@@ -1920,8 +1883,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   backgroundColor: AppColors.orange,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                    borderRadius:
-                        BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   elevation: 0,
                 ),
@@ -1933,53 +1895,58 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildTimeline() {
-    final segmentCount =
-        (_allSellers.length - 1).clamp(1, 99);
+    final segmentCount = (_allSellers.length - 1).clamp(1, 99);
     final List<_TimelineStep> steps = [];
 
     for (int seg = 0; seg < segmentCount; seg++) {
       final origin = _allSellers[seg];
       final destination = _allSellers[seg + 1];
-      final destType =
-          _getJenisLokasi(destination.jenisStop);
+      final destType = _getJenisLokasi(destination.jenisStop);
 
-      steps.add(_TimelineStep(
-        title: 'Bongkar Muat di ${origin.name}',
-        subtitle: 'Proses pengisian muatan',
-        icon: Icons.inventory_2_outlined,
-        segIndex: seg,
-        stageIndex: 0,
-      ));
-      steps.add(_TimelineStep(
-        title: 'Menuju ${destination.name}',
-        subtitle: 'Perjalanan ke $destType',
-        icon: Icons.navigation_outlined,
-        segIndex: seg,
-        stageIndex: 1,
-      ));
-      steps.add(_TimelineStep(
-        title: 'Tiba di ${destination.name}',
-        subtitle: 'Sampai di $destType',
-        icon: Icons.location_on_outlined,
-        segIndex: seg,
-        stageIndex: 2,
-      ));
+      steps.add(
+        _TimelineStep(
+          title: 'Bongkar Muat di ${origin.name}',
+          subtitle: 'Proses pengisian muatan',
+          icon: Icons.inventory_2_outlined,
+          segIndex: seg,
+          stageIndex: 0,
+        ),
+      );
+      steps.add(
+        _TimelineStep(
+          title: 'Menuju ${destination.name}',
+          subtitle: 'Perjalanan ke $destType',
+          icon: Icons.navigation_outlined,
+          segIndex: seg,
+          stageIndex: 1,
+        ),
+      );
+      steps.add(
+        _TimelineStep(
+          title: 'Tiba di ${destination.name}',
+          subtitle: 'Sampai di $destType',
+          icon: Icons.location_on_outlined,
+          segIndex: seg,
+          stageIndex: 2,
+        ),
+      );
     }
 
-    steps.add(_TimelineStep(
-      title: 'Selesai',
-      subtitle: 'Perjalanan selesai',
-      icon: Icons.check_circle_outline,
-      segIndex: segmentCount,
-      stageIndex: -1,
-    ));
+    steps.add(
+      _TimelineStep(
+        title: 'Selesai',
+        subtitle: 'Perjalanan selesai',
+        icon: Icons.check_circle_outline,
+        segIndex: segmentCount,
+        stageIndex: -1,
+      ),
+    );
 
     final int currentGlobal;
     if (_currentStage == TripStage.completed) {
       currentGlobal = steps.length - 1;
     } else {
-      currentGlobal = _completedStops.length * 3 +
-          _currentStage.index;
+      currentGlobal = _completedStops.length * 3 + _currentStage.index;
     }
 
     return Column(
@@ -1995,20 +1962,17 @@ class _HomeScreenState extends State<HomeScreen> {
             step.segIndex == _completedStops.length &&
             step.stageIndex >= 0) {
           durationSec =
-              _currentStageDurations[
-                  TripStage.values[step.stageIndex]];
+              _currentStageDurations[TripStage.values[step.stageIndex]];
         } else if (isPassed &&
             step.segIndex < _completedStops.length &&
             step.stageIndex >= 0) {
           durationSec = _completedStops[step.segIndex]
-                  .stageDurations[
-              TripStage.values[step.stageIndex]];
+              .stageDurations[TripStage.values[step.stageIndex]];
         }
 
         return IntrinsicHeight(
           child: Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Column(
                 children: [
@@ -2020,8 +1984,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: isPassed
                           ? AppColors.success
                           : isCurrent
-                              ? AppColors.navy
-                              : AppColors.borderLight,
+                          ? AppColors.navy
+                          : AppColors.borderLight,
                       border: Border.all(
                         color: isCurrent
                             ? AppColors.orange
@@ -2030,9 +1994,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     ),
                     child: Icon(
-                      isPassed
-                          ? Icons.check
-                          : step.icon,
+                      isPassed ? Icons.check : step.icon,
                       color: (isPassed || isCurrent)
                           ? Colors.white
                           : AppColors.textMuted,
@@ -2053,16 +2015,12 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(
-                      bottom: 16.0),
+                  padding: const EdgeInsets.only(bottom: 16.0),
                   child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment
-                                .spaceBetween,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Expanded(
                             child: Text(
@@ -2073,42 +2031,30 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ? FontWeight.bold
                                     : FontWeight.w600,
                                 color: isPassed
-                                    ? AppColors
-                                        .success
+                                    ? AppColors.success
                                     : isCurrent
-                                        ? AppColors
-                                            .navy
-                                        : AppColors
-                                            .textSecondary,
+                                    ? AppColors.navy
+                                    : AppColors.textSecondary,
                               ),
                             ),
                           ),
-                          if (durationSec !=
-                              null) ...[
+                          if (durationSec != null) ...[
                             const SizedBox(width: 6),
                             Container(
-                              padding:
-                                  const EdgeInsets
-                                      .symmetric(
-                                      horizontal: 5,
-                                      vertical: 2),
-                              decoration:
-                                  BoxDecoration(
-                                color: AppColors
-                                    .successBg,
-                                borderRadius:
-                                    BorderRadius
-                                        .circular(4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.successBg,
+                                borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                _formatReadableDuration(
-                                    durationSec),
+                                _formatReadableDuration(durationSec),
                                 style: const TextStyle(
                                   fontSize: 9,
-                                  fontWeight:
-                                      FontWeight.bold,
-                                  color: AppColors
-                                      .success,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.success,
                                 ),
                               ),
                             ),
@@ -2143,9 +2089,7 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: AppColors.orange.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AppColors.orange.withValues(alpha: 0.3),
-        ),
+        border: Border.all(color: AppColors.orange.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2156,8 +2100,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   color: AppColors.orange,
-                  borderRadius:
-                      BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(
                   Icons.touch_app,
@@ -2234,13 +2177,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.remove,
                 color: AppColors.error,
                 onTap: () {
-                  int val = int.tryParse(
-                          controller.text.trim()) ??
-                      0;
+                  int val = int.tryParse(controller.text.trim()) ?? 0;
                   if (val > 0) {
                     setState(() {
-                      controller.text =
-                          (val - 1).toString();
+                      controller.text = (val - 1).toString();
                     });
                   }
                 },
@@ -2250,20 +2190,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: 80,
                 child: TextField(
                   controller: controller,
-                  keyboardType:
-                      TextInputType.number,
+                  keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary,
                   ),
-                  decoration:
-                      const InputDecoration(
+                  decoration: const InputDecoration(
                     isDense: true,
-                    contentPadding:
-                        EdgeInsets.symmetric(
-                            vertical: 6),
+                    contentPadding: EdgeInsets.symmetric(vertical: 6),
                     border: InputBorder.none,
                   ),
                 ),
@@ -2273,12 +2209,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.add,
                 color: AppColors.success,
                 onTap: () {
-                  int val = int.tryParse(
-                          controller.text.trim()) ??
-                      0;
+                  int val = int.tryParse(controller.text.trim()) ?? 0;
                   setState(() {
-                    controller.text =
-                        (val + 1).toString();
+                    controller.text = (val + 1).toString();
                   });
                 },
               ),
@@ -2291,22 +2224,24 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _buildQuickChip(
-                    controller: controller,
-                    amount: 10,
-                    label: '+10'),
+                  controller: controller,
+                  amount: 10,
+                  label: '+10',
+                ),
                 const SizedBox(width: 6),
                 _buildQuickChip(
-                    controller: controller,
-                    amount: 100,
-                    label: '+100'),
+                  controller: controller,
+                  amount: 100,
+                  label: '+100',
+                ),
                 const SizedBox(width: 6),
                 _buildQuickChip(
-                    controller: controller,
-                    amount: 1000,
-                    label: '+1000'),
+                  controller: controller,
+                  amount: 1000,
+                  label: '+1000',
+                ),
                 const SizedBox(width: 6),
-                _buildResetChip(
-                    controller: controller),
+                _buildResetChip(controller: controller),
               ],
             ),
           ),
@@ -2330,12 +2265,10 @@ class _HomeScreenState extends State<HomeScreen> {
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            border: Border.all(
-                color: color.withValues(alpha: 0.3)),
+            border: Border.all(color: color.withValues(alpha: 0.3)),
             borderRadius: BorderRadius.circular(10),
           ),
-          child:
-              Icon(icon, color: color, size: 22),
+          child: Icon(icon, color: color, size: 22),
         ),
       ),
     );
@@ -2351,23 +2284,16 @@ class _HomeScreenState extends State<HomeScreen> {
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: () {
-          int val = int.tryParse(
-                  controller.text.trim()) ??
-              0;
+          int val = int.tryParse(controller.text.trim()) ?? 0;
           setState(() {
-            controller.text =
-                (val + amount).toString();
+            controller.text = (val + amount).toString();
           });
         },
         borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: 10, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            border: Border.all(
-              color:
-                  AppColors.orange.withValues(alpha: 0.3),
-            ),
+            border: Border.all(color: AppColors.orange.withValues(alpha: 0.3)),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
@@ -2383,8 +2309,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildResetChip(
-      {required TextEditingController controller}) {
+  Widget _buildResetChip({required TextEditingController controller}) {
     return Material(
       color: AppColors.borderLight,
       borderRadius: BorderRadius.circular(6),
@@ -2396,18 +2321,14 @@ class _HomeScreenState extends State<HomeScreen> {
         },
         borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           decoration: BoxDecoration(
-            border:
-                Border.all(color: AppColors.borderLight),
+            border: Border.all(color: AppColors.borderLight),
             borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
             children: [
-              Icon(Icons.refresh,
-                  size: 12,
-                  color: AppColors.textSecondary),
+              Icon(Icons.refresh, size: 12, color: AppColors.textSecondary),
               const SizedBox(width: 3),
               Text(
                 'Reset',
@@ -2426,7 +2347,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _getNextStageButtonLabel() {
     String? destName;
-    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+    if (_allSellers.isNotEmpty &&
+        _completedStops.length + 1 < _allSellers.length) {
       destName = _allSellers[_completedStops.length + 1].name;
     }
 
@@ -2451,14 +2373,13 @@ class _HomeScreenState extends State<HomeScreen> {
         color: AppColors.cardWhite,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color:
-                AppColors.success.withValues(alpha: 0.3),
-            width: 2),
+          color: AppColors.success.withValues(alpha: 0.3),
+          width: 2,
+        ),
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events,
-              color: AppColors.success, size: 52),
+          const Icon(Icons.emoji_events, color: AppColors.success, size: 52),
           const SizedBox(height: 12),
           const Text(
             'Perjalanan Selesai!',
@@ -2472,22 +2393,18 @@ class _HomeScreenState extends State<HomeScreen> {
           Text(
             'Terima kasih sudah mengirim hari ini.',
             textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 13,
-                color: AppColors.textSecondary),
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 20),
           ElevatedButton.icon(
             onPressed: () async {
               _stopTimer();
-              await ApiClient
-                  .resetDriverTestRitase(_idDriver);
+              await ApiClient.resetDriverTestRitase(_idDriver);
               setState(() {
                 _isTripStarted = false;
                 _isEntireRouteCompleted = false;
                 _completedStops.clear();
-                _currentStage =
-                    TripStage.loadingGoods;
+                _currentStage = TripStage.loadingGoods;
                 _activeStageSeconds = 0;
                 _currentStageDurations.clear();
               });
@@ -2496,18 +2413,14 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.replay),
             label: const Text(
               'Mulai Ulang (Testing)',
-              style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.orange,
               foregroundColor: Colors.white,
-              minimumSize:
-                  const Size(double.infinity, 44),
+              minimumSize: const Size(double.infinity, 44),
               shape: RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
           ),
@@ -2517,11 +2430,9 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.home),
             label: const Text('Kembali ke Beranda'),
             style: OutlinedButton.styleFrom(
-              minimumSize: const Size(
-                  double.infinity, 44),
+              minimumSize: const Size(double.infinity, 44),
               shape: RoundedRectangleBorder(
-                borderRadius:
-                    BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
           ),
@@ -2561,8 +2472,7 @@ class _WavePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) =>
-      false;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 int _toInt(dynamic v) {

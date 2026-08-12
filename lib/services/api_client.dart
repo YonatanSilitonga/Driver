@@ -202,6 +202,7 @@ class ApiClient {
     int idDriver = 0,
     int idKendaraan = 0,
     int idRitase = 0,
+    String? namaLokasi,
   }) async {
     // Identitas belum terisi (belum login / config kosong) → jangan kirim data palsu.
     if (idKendaraan <= 0) {
@@ -229,6 +230,7 @@ class ApiClient {
           'jumlah_koli': koli,
           'jumlah_ecer': ecer,
           'durasi_detik': durasiDetik,
+          'nama_lokasi': namaLokasi,
         },
       );
       print(
@@ -273,16 +275,16 @@ class ApiClient {
     int durasiDetik = 0,
     String? namaLokasi,
   }) async {
-    final targetId = idRitase > 0 ? idRitase : 4;
     try {
       print(
-        '📤 [STATUS] Update $targetId -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer ($durasiDetik dtk)',
+        '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer ($durasiDetik dtk)',
       );
       final res = await dio.post(
-        '/armada/ritase/$targetId/status',
+        '/driver/trip-status',
         data: {
+          'id_ritase': idRitase,
           'status': status,
-          'nama_lokasi': namaLokasi,
+          'nama_lokasi': namaLokasi ?? '',
           'latitude': latitude,
           'longitude': longitude,
           'jumlah_koli': koli,
