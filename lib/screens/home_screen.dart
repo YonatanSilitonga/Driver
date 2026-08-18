@@ -193,6 +193,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<bool> _cardVisible = [false, false, false];
   final List<AnimationController?> _cardControllers = [];
 
+  // ── Guard izin lokasi ──
+  // `_checkingPermission`: cegah panggilan bertumpuk (initState + resume
+  // + requestPermission yang memicu lifecycle) → dialog lokasi numpuk.
+  // `_alwaysPromptedThisSession`: dialog "Live tracking saat layar mati"
+  // cuma muncul SEKALI per sesi app, bukan tiap balik dari background.
+  bool _checkingPermission = false;
+  bool _alwaysPromptedThisSession = false;
+
   @override
   void initState() {
     super.initState();
@@ -374,72 +382,91 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _ensureLocationPermission() async {
-    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
-      return;
-    }
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    // Android 10+: background GPS butuh "Always". Prompt kedua biasanya
-    // menawarkan "Allow all the time" — minta sekali lagi biar muncul.
-    if (permission == LocationPermission.whileInUse) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.denied) {
-      _showSnack('Izin lokasi ditolak. Live tracking tidak berjalan.');
-      return;
-    }
-    if (permission == LocationPermission.deniedForever) {
-      _showSnack('Izin lokasi ditolak permanen. Buka pengaturan HP dan izinkan "Selalu".');
-      return;
-    }
-    if (permission == LocationPermission.whileInUse) {
-      // Masih "saat app digunakan" → minta user set "Selalu" manual lewat settings.
-      // Tanpa ini posisi berhenti terkirim saat layar mati (aturan Android).
-      if (!mounted) return;
-      final goSettings = await AppDialog.confirm(
-        context: context,
-        icon: Icons.location_on_rounded,
-        iconColor: AppColors.orange,
-        title: 'Live tracking saat layar mati',
-        message:
-            'Biar posisi armada tetap terkirim walau layar HP mati, pilih '
-            '"Izinkan semua waktu" (Allow all the time) di pengaturan lokasi MUSTGO.',
-        actionLabel: 'Buka Pengaturan',
-        cancelLabel: 'Nanti',
-      );
-      if (goSettings == true) {
-        await Geolocator.openAppSettings();
-        // User balik dari Settings → re-check. Kalau sudah "Always", service
-        // langsung start; kalau masih belum, kasih tahu biar tracking foreground
-        // tetap jalan (layar aktif) walaupun layar mati belum bisa.
+    // Guard: kalau check lagi sedang jalan (misal dipanggil lagi dari resume
+    // saat requestPermission memicu lifecycle), skip biar gak numpuk dialog.
+    if (_checkingPermission) return;
+    _checkingPermission = true;
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
+        return;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      // Android 10+: background GPS butuh "Always". Prompt kedua biasanya
+      // menawarkan "Allow all the time" — minta sekali lagi biar muncul.
+      if (permission == LocationPermission.whileInUse) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied) {
+        _showSnack('Izin lokasi ditolak. Live tracking tidak berjalan.');
+        return;
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _showSnack('Izin lokasi ditolak permanen. Buka pengaturan HP dan izinkan "Selalu".');
+        return;
+      }
+      if (permission == LocationPermission.whileInUse) {
+        // Masih "saat app digunakan" → minta user set "Selalu" manual lewat settings.
+        // Tanpa ini posisi berhenti terkirim saat layar mati (aturan Android).
+        // Prompt cuma SEKALI per sesi — kalau user pilih "Nanti", jangan
+        // ganggu lagi tiap balik dari background (tapi tetap cek di bawah).
         if (!mounted) return;
-        permission = await Geolocator.checkPermission();
-        if (permission == LocationPermission.always) {
+        if (!_alwaysPromptedThisSession) {
+          _alwaysPromptedThisSession = true;
+          final goSettings = await AppDialog.confirm(
+            context: context,
+            icon: Icons.location_on_rounded,
+            iconColor: AppColors.orange,
+            title: 'Live tracking saat layar mati',
+            message:
+                'Biar posisi armada tetap terkirim walau layar HP mati, pilih '
+                '"Izinkan semua waktu" (Allow all the time) di pengaturan lokasi MUSTGO.',
+            actionLabel: 'Buka Pengaturan',
+            cancelLabel: 'Nanti',
+          );
+          if (goSettings == true) {
+            await Geolocator.openAppSettings();
+            // User balik dari Settings → re-check. Kalau sudah "Always", service
+            // langsung start; kalau masih belum, kasih tahu biar tracking foreground
+            // tetap jalan (layar aktif) walaupun layar mati belum bisa.
+            if (!mounted) return;
+            permission = await Geolocator.checkPermission();
+            if (permission == LocationPermission.always) {
+              try {
+                await startBackgroundTracking();
+              } catch (_) {}
+              await _refreshLocation();
+              return;
+            }
+            if (permission != LocationPermission.denied &&
+                permission != LocationPermission.deniedForever) {
+              _showSnack(
+                'Izin lokasi belum "Semua waktu". Tracking tetap jalan saat app '
+                'terbuka, tapi berhenti saat layar mati.',
+              );
+            }
+          }
+        } else {
+          // Sudah pernah ditanya di sesi ini → diam-diam pastikan service
+          // foreground tetap hidup (tanpa modal).
           try {
             await startBackgroundTracking();
           } catch (_) {}
-          await _refreshLocation();
-          return;
         }
-        if (permission != LocationPermission.denied &&
-            permission != LocationPermission.deniedForever) {
-          _showSnack(
-            'Izin lokasi belum "Semua waktu". Tracking tetap jalan saat app '
-            'terbuka, tapi berhenti saat layar mati.',
-          );
-        }
+        return;
       }
-      return;
+      // Sudah "Always" → pastikan foreground service hidup (kirim GPS tiap 30s).
+      try {
+        await startBackgroundTracking();
+      } catch (_) {}
+      await _refreshLocation();
+    } finally {
+      _checkingPermission = false;
     }
-    // Sudah "Always" → pastikan foreground service hidup (kirim GPS tiap 30s).
-    try {
-      await startBackgroundTracking();
-    } catch (_) {}
-    await _refreshLocation();
   }
 
   Future<void> _refreshLocation() async {
