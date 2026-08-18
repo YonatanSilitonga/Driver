@@ -6,7 +6,9 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
 import 'login_screen.dart';
+import 'permission_guide_screen.dart';
 import '../widgets/app_colors.dart';
+import '../widgets/app_dialog.dart';
 import '../widgets/vehicle_card.dart';
 import '../widgets/origin_card.dart';
 
@@ -107,7 +109,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<SellerDummy> _allSellers = [];
   bool _isLastRitase = false;
 
@@ -156,7 +158,11 @@ class _HomeScreenState extends State<HomeScreen> {
   int _currentActualEcer = 0;
 
   Timer? _stopwatchTimer;
+  Timer? _watchdogTimer;
   int _activeStageSeconds = 0;
+  /// Baseline stage aktif dari server (created_at event status terakhir).
+  /// Dipakai supaya durasi stage gak reset ke 0 tiap app dibuka lagi.
+  DateTime? _stageStartedAt;
   final Map<TripStage, int> _currentStageDurations = {};
 
   double _latitude = -6.2024;
@@ -190,9 +196,41 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadConfig();
     _ensureLocationPermission();
     ApiClient.markAppOpen();
+    _startWatchdog();
+  }
+
+  /// Watchdog tiap 30 detik: kalau service background mati (di-kill OS),
+  /// auto-restart biar GPS tetap terkirim walau layar mati.
+  void _startWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      ensureTrackingRunning();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Saat app balik ke foreground: recompute durasi stage dari baseline
+    // (timer Dart pause saat layar mati → _activeStageSeconds ketinggalan),
+    // plus kirim tracking biar dashboard langsung update posisi.
+    if (state == AppLifecycleState.resumed) {
+      ApiClient.markAppOpen();
+      if (_isTripStarted && _stageStartedAt != null) {
+        setState(() {
+          _activeStageSeconds =
+              DateTime.now().difference(_stageStartedAt!).inSeconds;
+        });
+      }
+      // Re-check izin & auto-start service: user mungkin baru balik dari
+      // Settings setelah mengubah izin lokasi → langsung nyalakan tracking.
+      _ensureLocationPermission();
+      _sendInstantTracking();
+    }
   }
 
   Future<void> _loadConfig() async {
@@ -240,10 +278,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _fetchActiveRitase() async {
     if (_idKendaraan == 0) return;
-    setState(() {
-      _allSellers.clear();
-      _isTripStarted = false;
-    });
 
     final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
     if (!mounted) return;
@@ -269,11 +303,46 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }).toList();
 
+      final stageStartedAt =
+          DateTime.tryParse(data['stage_started_at']?.toString() ?? '');
+      // Progress resume dari server: index stop yang sedang dikerjakan +
+      // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
+      // bukan mulai ulang dari stop pertama).
+      final stopIndex =
+          (data['current_stop_index'] as num?)?.toInt() ?? 0;
+      final lastStatus = data['last_status']?.toString() ?? '';
+
       setState(() {
         _idRitase = data['id_ritase'] ?? 0;
         _isLastRitase = data['is_last_ritase'] == true;
         _allSellers = parsedSellers;
+        _stageStartedAt = stageStartedAt;
+
+        // Anti-manipulasi: kalau ada ritase aktif, trip TETAP dianggap jalan.
+        // Jangan reset ke beranda walau ini hasil refresh.
+        if (!_isTripStarted || _currentSeller == null) {
+          // Rekonstruksi posisi terakhir dari server (app baru dibuka /
+          // kill lalu buka lagi).
+          final idx = stopIndex.clamp(0, parsedSellers.length - 1);
+          _currentSeller = parsedSellers.isNotEmpty
+              ? parsedSellers[idx]
+              : null;
+          _currentStage = _mapStatusToStage(lastStatus);
+          _activeStageSeconds = _stageStartedAt != null
+              ? DateTime.now().difference(_stageStartedAt!).inSeconds
+              : 0;
+          _isTripStarted = true;
+          _isEntireRouteCompleted = false;
+          _currentStageDurations.clear();
+          _completedStops.clear();
+        }
       });
+
+      // Timer stopwatch + GPS jalan terus selama trip aktif (aman dipanggil
+      // berulang — _startTimer cancel dulu yang lama).
+      if (_isTripStarted && !_isEntireRouteCompleted) {
+        _startTimer();
+      }
 
       await ApiClient.saveDriverConfig(
         idDriver: _idDriver,
@@ -289,8 +358,19 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       setState(() {
         _idRitase = 0;
+        _isTripStarted = false;
+        _isEntireRouteCompleted = false;
       });
     }
+  }
+
+  /// Map status event server → stage mobile (buat resume setelah app di-kill).
+  TripStage _mapStatusToStage(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('menuju')) return TripStage.enRoute;
+    if (s.contains('tiba')) return TripStage.arrived;
+    if (s.contains('selesai')) return TripStage.completed;
+    return TripStage.loadingGoods; // bongkar muat / default
   }
 
   Future<void> _ensureLocationPermission() async {
@@ -303,14 +383,62 @@ class _HomeScreenState extends State<HomeScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
+    // Android 10+: background GPS butuh "Always". Prompt kedua biasanya
+    // menawarkan "Allow all the time" — minta sekali lagi biar muncul.
+    if (permission == LocationPermission.whileInUse) {
+      permission = await Geolocator.requestPermission();
+    }
     if (permission == LocationPermission.denied) {
       _showSnack('Izin lokasi ditolak. Live tracking tidak berjalan.');
       return;
     }
     if (permission == LocationPermission.deniedForever) {
-      _showSnack('Izin lokasi ditolak permanen. Atur lewat pengaturan HP.');
+      _showSnack('Izin lokasi ditolak permanen. Buka pengaturan HP dan izinkan "Selalu".');
       return;
     }
+    if (permission == LocationPermission.whileInUse) {
+      // Masih "saat app digunakan" → minta user set "Selalu" manual lewat settings.
+      // Tanpa ini posisi berhenti terkirim saat layar mati (aturan Android).
+      if (!mounted) return;
+      final goSettings = await AppDialog.confirm(
+        context: context,
+        icon: Icons.location_on_rounded,
+        iconColor: AppColors.orange,
+        title: 'Live tracking saat layar mati',
+        message:
+            'Biar posisi armada tetap terkirim walau layar HP mati, pilih '
+            '"Izinkan semua waktu" (Allow all the time) di pengaturan lokasi MUSTGO.',
+        actionLabel: 'Buka Pengaturan',
+        cancelLabel: 'Nanti',
+      );
+      if (goSettings == true) {
+        await Geolocator.openAppSettings();
+        // User balik dari Settings → re-check. Kalau sudah "Always", service
+        // langsung start; kalau masih belum, kasih tahu biar tracking foreground
+        // tetap jalan (layar aktif) walaupun layar mati belum bisa.
+        if (!mounted) return;
+        permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.always) {
+          try {
+            await startBackgroundTracking();
+          } catch (_) {}
+          await _refreshLocation();
+          return;
+        }
+        if (permission != LocationPermission.denied &&
+            permission != LocationPermission.deniedForever) {
+          _showSnack(
+            'Izin lokasi belum "Semua waktu". Tracking tetap jalan saat app '
+            'terbuka, tapi berhenti saat layar mati.',
+          );
+        }
+      }
+      return;
+    }
+    // Sudah "Always" → pastikan foreground service hidup (kirim GPS tiap 30s).
+    try {
+      await startBackgroundTracking();
+    } catch (_) {}
     await _refreshLocation();
   }
 
@@ -366,7 +494,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopwatchTimer?.cancel();
+    _watchdogTimer?.cancel();
     _awbInputController.dispose();
     _koliInputController.dispose();
     _ecerInputController.dispose();
@@ -440,6 +570,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentSeller = null;
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
+      _stageStartedAt = null;
       _currentStageDurations.clear();
       _completedStops.clear();
       _currentActualAwb = 0;
@@ -460,6 +591,9 @@ class _HomeScreenState extends State<HomeScreen> {
       _currentSeller = seller;
       _isTripStarted = true;
       _currentStage = TripStage.loadingGoods;
+      // Stage baru dimulai SEKARANG — baseline waktu nyata, bukan dari timer
+      // yang pause saat layar mati. Durasi stage aktif = now - _stageStartedAt.
+      _stageStartedAt = DateTime.now();
       _activeStageSeconds = 0;
       _currentStageDurations.clear();
       _currentActualAwb = 0;
@@ -627,138 +761,114 @@ class _HomeScreenState extends State<HomeScreen> {
     final confirmCtrl = TextEditingController();
     bool loading = false;
 
-    showDialog(
+    AppDialog.showStateful(
       context: context,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (dialogCtx, setDialogState) {
-          return AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title: const Text(
-              'Ganti Password',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: oldCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password Lama',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: newCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Password Baru',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: confirmCtrl,
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Konfirmasi Password Baru',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ],
+      icon: Icons.lock_reset_rounded,
+      iconColor: AppColors.navy,
+      title: 'Ganti Password',
+      builder: (dialogCtx, setDialogState) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: oldCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Password Lama',
+                border: OutlineInputBorder(),
               ),
             ),
-            actions: [
-              TextButton(
-                onPressed: loading ? null : () => Navigator.pop(dialogCtx),
-                child: const Text(
-                  'Batal',
-                  style: TextStyle(
-                    color: Colors.grey,
-                    fontWeight: FontWeight.bold,
-                  ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: newCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Password Baru',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: confirmCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Konfirmasi Password Baru',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                AppDialog.cancelButton(
+                  label: 'Batal',
+                  onPressed: loading
+                      ? () {}
+                      : () => Navigator.pop(dialogCtx),
                 ),
-              ),
-              ElevatedButton(
-                onPressed: loading
-                    ? null
-                    : () async {
-                        final old = oldCtrl.text.trim();
-                        final newP = newCtrl.text;
-                        final conf = confirmCtrl.text;
-                        String? err;
-                        if (old.isEmpty || newP.isEmpty) {
-                          err = 'Semua field wajib diisi.';
-                        } else if (newP.length < 6) {
-                          err = 'Password baru minimal 6 karakter.';
-                        } else if (newP != conf) {
-                          err = 'Konfirmasi password tidak sama.';
-                        }
-                        if (err != null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(err),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                          return;
-                        }
-                        setDialogState(() => loading = true);
-                        try {
-                          await ApiClient.changePassword(
-                            oldPassword: old,
-                            newPassword: newP,
-                          );
-                          if (!dialogCtx.mounted) return;
-                          Navigator.pop(dialogCtx);
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Password berhasil diubah. Silakan login ulang.',
+                const SizedBox(width: 8),
+                AppDialog.actionButton(
+                  label: 'Simpan',
+                  color: AppColors.navy,
+                  onPressed: loading
+                      ? () {}
+                      : () async {
+                          final old = oldCtrl.text.trim();
+                          final newP = newCtrl.text;
+                          final conf = confirmCtrl.text;
+                          String? err;
+                          if (old.isEmpty || newP.isEmpty) {
+                            err = 'Semua field wajib diisi.';
+                          } else if (newP.length < 6) {
+                            err = 'Password baru minimal 6 karakter.';
+                          } else if (newP != conf) {
+                            err = 'Konfirmasi password tidak sama.';
+                          }
+                          if (err != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(err),
+                                backgroundColor: Colors.red,
                               ),
-                              backgroundColor: AppColors.navy,
-                            ),
-                          );
-                          await _forceRelogin();
-                        } catch (e) {
-                          if (!dialogCtx.mounted) return;
-                          setDialogState(() => loading = false);
-                          ScaffoldMessenger.of(dialogCtx).showSnackBar(
-                            SnackBar(
-                              content: Text(e.toString()),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.navy,
-                  foregroundColor: Colors.white,
+                            );
+                            return;
+                          }
+                          setDialogState(() => loading = true);
+                          try {
+                            await ApiClient.changePassword(
+                              oldPassword: old,
+                              newPassword: newP,
+                            );
+                            if (!dialogCtx.mounted) return;
+                            Navigator.pop(dialogCtx);
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Password berhasil diubah. Silakan login ulang.',
+                                ),
+                                backgroundColor: AppColors.navy,
+                              ),
+                            );
+                            await _forceRelogin();
+                          } catch (e) {
+                            if (!dialogCtx.mounted) return;
+                            setDialogState(() => loading = false);
+                            ScaffoldMessenger.of(dialogCtx).showSnackBar(
+                              SnackBar(
+                                content: Text(e.toString()),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        },
                 ),
-                child: loading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text(
-                        'Simpan',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
+              ],
+            ),
+          ],
+        );
+      },
     ).then((_) {
       oldCtrl.dispose();
       newCtrl.dispose();
@@ -782,49 +892,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _confirmLogout() async {
-    final confirm = await showDialog<bool>(
+    final confirm = await AppDialog.confirm(
       context: context,
-      builder: (dialogCtx) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.logout_rounded, color: AppColors.error),
-              SizedBox(width: 8),
-              Text(
-                'Konfirmasi Logout',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: const Text('Apakah Anda yakin ingin keluar dari akun ini?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx, false),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(dialogCtx, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.error,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text(
-                'Keluar',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
+      icon: Icons.logout_rounded,
+      iconColor: AppColors.error,
+      title: 'Konfirmasi Logout',
+      message: 'Apakah Anda yakin ingin keluar dari akun ini?',
+      actionLabel: 'Keluar',
+      destructive: true,
     );
 
     if (confirm == true && mounted) {
@@ -844,74 +919,40 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _confirmAndNextStage() {
-    showDialog(
+    AppDialog.show(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(
-                Icons.help_outline_rounded,
-                color: AppColors.orange,
-                size: 26,
-              ),
-              SizedBox(width: 8),
-              Text(
-                'Konfirmasi Status',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: Text.rich(
+      icon: Icons.help_outline_rounded,
+      iconColor: AppColors.orange,
+      title: 'Konfirmasi Status',
+      content: Text.rich(
+        TextSpan(
+          text: 'Status ke:\n\n',
+          style: const TextStyle(fontSize: 14, color: Colors.black87),
+          children: [
             TextSpan(
-              text: 'Status ke:\n\n',
-              style: const TextStyle(fontSize: 14, color: Colors.black87),
-              children: [
-                TextSpan(
-                  text: _getNextStageButtonLabel(),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.navy,
-                  ),
-                ),
-                const TextSpan(text: '?'),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
+              text: _getNextStageButtonLabel(),
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: AppColors.navy,
               ),
             ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                _nextStage();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.orange,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: const Text(
-                'Ya, Lanjutkan',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
+            const TextSpan(text: '?'),
           ],
-        );
-      },
+        ),
+      ),
+      actions: [
+        AppDialog.cancelButton(
+          label: 'Batal',
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        AppDialog.actionButton(
+          label: 'Ya, Lanjutkan',
+          onPressed: () {
+            Navigator.of(context).pop();
+            _nextStage();
+          },
+        ),
+      ],
     );
   }
 
@@ -972,6 +1013,10 @@ class _HomeScreenState extends State<HomeScreen> {
         case TripStage.completed:
           break;
       }
+
+      // Stage baru dimulai SEKARANG — baseline waktu nyata (tahan layar mati).
+      // Backend juga hitung durasi dari selisih created_at, jadi konsisten.
+      _stageStartedAt = DateTime.now();
     });
 
     // Determine location name for the NEW stage (_currentStage)
@@ -992,7 +1037,7 @@ class _HomeScreenState extends State<HomeScreen> {
       longitude: _longitude,
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
-      durasiDetik: finishedDuration,
+      durasiDetik: 0, // durasi dihitung dari selisih created_at antar event di web
       namaLokasi: locationName,
     );
 
@@ -1025,6 +1070,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _isTripStarted = true;
         _currentStage = TripStage.loadingGoods;
         _activeStageSeconds = 0;
+        // Kalau ritase baru belum punya event, baseline mulai dari sekarang.
+        _stageStartedAt ??= DateTime.now();
         _currentStageDurations.clear();
       });
       _startTimer();
@@ -1051,125 +1098,28 @@ class _HomeScreenState extends State<HomeScreen> {
     return '$m mnt $s dtk';
   }
 
-  void _handleBackToHome() {
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.arrow_back, color: AppColors.navy, size: 24),
-              SizedBox(width: 8),
-              Text(
-                'Kembali ke Beranda',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: const Text(
-            'Perjalanan saat ini akan dihentikan.',
-            style: TextStyle(fontSize: 14, color: Colors.black87),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                _resetSimulation();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.navy,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: const Text(
-                'Ya, Kembali',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   void _confirmExitApp() {
-    showDialog(
+    AppDialog.confirm(
       context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.logout, color: AppColors.navy, size: 24),
-              SizedBox(width: 8),
-              Text(
-                'Keluar Aplikasi',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          content: const Text(
-            'Yakin mau keluar dari aplikasi?',
-            style: TextStyle(fontSize: 14, color: Colors.black87),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text(
-                'Batal',
-                style: TextStyle(
-                  color: Colors.grey,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.of(dialogContext).pop();
-                // Keluar beneran: matiin tracking + kasih tau backend biar
-                // armada langsung Offline di dashboard (gak nunggu ambang 3 mnt).
-                try {
-                  await sendOfflineSignal();
-                } catch (_) {}
-                try {
-                  await stopBackgroundTracking();
-                } catch (_) {}
-                if (!mounted) return;
-                SystemNavigator.pop();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.navy,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: const Text(
-                'Keluar',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
+      icon: Icons.logout_rounded,
+      iconColor: AppColors.navy,
+      title: 'Keluar Aplikasi',
+      message: 'Yakin mau keluar dari aplikasi?',
+      actionLabel: 'Keluar',
+      destructive: true,
+    ).then((confirmed) async {
+      if (confirmed != true || !mounted) return;
+      // Keluar beneran: matiin tracking + kasih tau backend biar
+      // armada langsung Offline di dashboard (gak nunggu ambang 3 mnt).
+      try {
+        await sendOfflineSignal();
+      } catch (_) {}
+      try {
+        await stopBackgroundTracking();
+      } catch (_) {}
+      if (!mounted) return;
+      SystemNavigator.pop();
+    });
   }
 
   // ═══════════════════════════════════════════════
@@ -1182,13 +1132,13 @@ class _HomeScreenState extends State<HomeScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
-        // Saat trip berjalan → konfirmasi kembali ke beranda,
-        // selain itu → konfirmasi keluar aplikasi.
-        if (_isTripStarted) {
-          _handleBackToHome();
-        } else {
-          _confirmExitApp();
+        // Anti-manipulasi: selama trip aktif, back DIBLOKIR — driver wajib
+        // selesaikan rute dulu (gak bisa kabur dari tracking seenaknya).
+        if (_isTripStarted && !_isEntireRouteCompleted) {
+          _showSnack('Selesaikan perjalanan dulu sebelum keluar.');
+          return;
         }
+        _confirmExitApp();
       },
       child: Scaffold(
         backgroundColor: AppColors.scaffoldBg,
@@ -1241,24 +1191,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: Row(
                 children: [
-                  // Back button during trip
-                  if (_isTripStarted)
-                    GestureDetector(
-                      onTap: _handleBackToHome,
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  if (_isTripStarted) const SizedBox(width: 10),
                   // Logo
                   Container(
                     padding: const EdgeInsets.all(8),
@@ -1335,7 +1267,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     onSelected: (value) {
                       if (value == 'password') {
                         _showChangePasswordDialog();
+                      } else if (value == 'permissions') {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const PermissionGuideScreen(),
+                          ),
+                        );
                       } else if (value == 'logout') {
+                        // Anti-manipulasi: selama trip aktif, logout diblokir —
+                        // driver gak bisa kabur dari tracking tengah jalan.
+                        if (_isTripStarted && !_isEntireRouteCompleted) {
+                          _showSnack(
+                            'Selesaikan perjalanan dulu sebelum logout.',
+                          );
+                          return;
+                        }
                         _confirmLogout();
                       }
                     },
@@ -1352,6 +1298,21 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             SizedBox(width: 10),
                             Text('Ganti Password'),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'permissions',
+                        height: 44,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.settings_suggest_rounded,
+                              size: 18,
+                              color: AppColors.navy,
+                            ),
+                            SizedBox(width: 10),
+                            Text('Persiapan Tracking'),
                           ],
                         ),
                       ),
@@ -2396,35 +2357,6 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: () async {
-              _stopTimer();
-              await ApiClient.resetDriverTestRitase(_idDriver);
-              setState(() {
-                _isTripStarted = false;
-                _isEntireRouteCompleted = false;
-                _completedStops.clear();
-                _currentStage = TripStage.loadingGoods;
-                _activeStageSeconds = 0;
-                _currentStageDurations.clear();
-              });
-              await _fetchActiveRitase();
-            },
-            icon: const Icon(Icons.replay),
-            label: const Text(
-              'Mulai Ulang (Testing)',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.orange,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 44),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
           OutlinedButton.icon(
             onPressed: _resetSimulation,
             icon: const Icon(Icons.home),
