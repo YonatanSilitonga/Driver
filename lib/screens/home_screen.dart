@@ -159,7 +159,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Timer? _stopwatchTimer;
   Timer? _watchdogTimer;
+  Timer? _routePollingTimer;
   int _activeStageSeconds = 0;
+
   /// Baseline stage aktif dari server (created_at event status terakhir).
   /// Dipakai supaya durasi stage gak reset ke 0 tiap app dibuka lagi.
   DateTime? _stageStartedAt;
@@ -209,6 +211,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _ensureLocationPermission();
     ApiClient.markAppOpen();
     _startWatchdog();
+    _startRoutePollingTimer();
   }
 
   /// Watchdog tiap 30 detik: kalau service background mati (di-kill OS),
@@ -221,6 +224,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  void _startRoutePollingTimer() {
+    _routePollingTimer?.cancel();
+    _routePollingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      _fetchActiveRitase(isSilentCheck: true);
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Saat app balik ke foreground: recompute durasi stage dari baseline
@@ -230,8 +241,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ApiClient.markAppOpen();
       if (_isTripStarted && _stageStartedAt != null) {
         setState(() {
-          _activeStageSeconds =
-              DateTime.now().difference(_stageStartedAt!).inSeconds;
+          _activeStageSeconds = DateTime.now()
+              .difference(_stageStartedAt!)
+              .inSeconds;
         });
       }
       // Re-check izin & auto-start service: user mungkin baru balik dari
@@ -284,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _fetchActiveRitase() async {
+  Future<void> _fetchActiveRitase({bool isSilentCheck = false}) async {
     if (_idKendaraan == 0) return;
 
     final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
@@ -311,14 +323,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       }).toList();
 
-      final stageStartedAt =
-          DateTime.tryParse(data['stage_started_at']?.toString() ?? '');
+      final stageStartedAt = DateTime.tryParse(
+        data['stage_started_at']?.toString() ?? '',
+      );
       // Progress resume dari server: index stop yang sedang dikerjakan +
       // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
       // bukan mulai ulang dari stop pertama).
-      final stopIndex =
-          (data['current_stop_index'] as num?)?.toInt() ?? 0;
+      final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
+      final statusRitase = (data['status'] ?? '').toString().toLowerCase();
       final lastStatus = data['last_status']?.toString() ?? '';
+      // Trip dianggap benar-benar sedang berjalan jika status ritase sudah 'berjalan'/'proses'
+      // ATAU sudah ada event status terakhir (misal: 'menuju', 'tiba', 'bongkar').
+      final isActuallyStarted =
+          statusRitase == 'berjalan' ||
+          statusRitase == 'proses' ||
+          lastStatus.isNotEmpty;
+
+      // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
+      bool routeChanged = false;
+      if (isSilentCheck && _allSellers.isNotEmpty) {
+        if (_allSellers.length != parsedSellers.length) {
+          routeChanged = true;
+        } else {
+          for (int i = 0; i < _allSellers.length; i++) {
+            if (_allSellers[i].id != parsedSellers[i].id ||
+                _allSellers[i].name != parsedSellers[i].name) {
+              routeChanged = true;
+              break;
+            }
+          }
+        }
+      }
 
       setState(() {
         _idRitase = data['id_ritase'] ?? 0;
@@ -326,25 +361,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _allSellers = parsedSellers;
         _stageStartedAt = stageStartedAt;
 
-        // Anti-manipulasi: kalau ada ritase aktif, trip TETAP dianggap jalan.
-        // Jangan reset ke beranda walau ini hasil refresh.
         if (!_isTripStarted || _currentSeller == null) {
-          // Rekonstruksi posisi terakhir dari server (app baru dibuka /
-          // kill lalu buka lagi).
           final idx = stopIndex.clamp(0, parsedSellers.length - 1);
-          _currentSeller = parsedSellers.isNotEmpty
-              ? parsedSellers[idx]
-              : null;
+          _currentSeller = parsedSellers.isNotEmpty ? parsedSellers[idx] : null;
           _currentStage = _mapStatusToStage(lastStatus);
           _activeStageSeconds = _stageStartedAt != null
               ? DateTime.now().difference(_stageStartedAt!).inSeconds
               : 0;
-          _isTripStarted = true;
+          _isTripStarted = isActuallyStarted;
           _isEntireRouteCompleted = false;
           _currentStageDurations.clear();
           _completedStops.clear();
+        } else {
+          // Update current seller reference to new stop list
+          final idx = _completedStops.length.clamp(0, parsedSellers.length - 1);
+          if (parsedSellers.isNotEmpty) {
+            _currentSeller = parsedSellers[idx];
+          }
         }
       });
+
+      if (routeChanged && mounted) {
+        _showRouteUpdatedNotification();
+      }
 
       // Timer stopwatch + GPS jalan terus selama trip aktif (aman dipanggil
       // berulang — _startTimer cancel dulu yang lama).
@@ -364,11 +403,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _isEntireRouteCompleted = true;
       });
     } else {
+      bool wasActive = _allSellers.isNotEmpty || _isTripStarted;
       setState(() {
         _idRitase = 0;
+        _allSellers.clear();
         _isTripStarted = false;
         _isEntireRouteCompleted = false;
       });
+      if (isSilentCheck && wasActive && mounted) {
+        _showRouteDeletedNotification();
+      }
     }
   }
 
@@ -389,7 +433,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _showSnack('Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.');
+        _showSnack(
+          'Layanan lokasi HP dimatikan. Aktifkan untuk live tracking.',
+        );
         return;
       }
       var permission = await Geolocator.checkPermission();
@@ -406,7 +452,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       if (permission == LocationPermission.deniedForever) {
-        _showSnack('Izin lokasi ditolak permanen. Buka pengaturan HP dan izinkan "Selalu".');
+        _showSnack(
+          'Izin lokasi ditolak permanen. Buka pengaturan HP dan izinkan "Selalu".',
+        );
         return;
       }
       if (permission == LocationPermission.whileInUse) {
@@ -421,9 +469,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             context: context,
             icon: Icons.location_on_rounded,
             iconColor: AppColors.orange,
-            title: 'Live tracking saat layar mati',
+            title: 'Perizinan akses gps',
             message:
-                'Biar posisi armada tetap terkirim walau layar HP mati, pilih '
+                'Agar posisi armada tetap dapat dipantau walau layar HP mati, pilih '
                 '"Izinkan semua waktu" (Allow all the time) di pengaturan lokasi MUSTGO.',
             actionLabel: 'Buka Pengaturan',
             cancelLabel: 'Nanti',
@@ -524,6 +572,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _stopwatchTimer?.cancel();
     _watchdogTimer?.cancel();
+    _routePollingTimer?.cancel();
     _awbInputController.dispose();
     _koliInputController.dispose();
     _ecerInputController.dispose();
@@ -531,6 +580,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       c?.dispose();
     }
     super.dispose();
+  }
+
+  void _showRouteUpdatedNotification() {
+    AppDialog.confirm(
+      context: context,
+      icon: Icons.edit_notifications_rounded,
+      iconColor: AppColors.orange,
+      title: 'Perubahan Rute dari Tower Controll',
+      message:
+          'Koordinator baru saja memperbarui rute perjalanan Anda. Tampilan perhentian di layar HP Anda telah disesuaikan secara otomatis.',
+      actionLabel: 'Mengerti',
+      cancelLabel: 'Tutup',
+    );
+  }
+
+  void _showRouteDeletedNotification() {
+    AppDialog.confirm(
+      context: context,
+      icon: Icons.delete_sweep_rounded,
+      iconColor: AppColors.error,
+      title: 'Rute Dihapus oleh Admin',
+      message:
+          'Jadwal rute perjalanan Anda telah dihapus oleh Admin. Tampilan aplikasi telah dikembalikan ke Halaman Beranda.',
+      actionLabel: 'Mengerti',
+      cancelLabel: 'Tutup',
+    );
   }
 
   void _startTimer() {
@@ -830,9 +905,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 AppDialog.cancelButton(
                   label: 'Batal',
-                  onPressed: loading
-                      ? () {}
-                      : () => Navigator.pop(dialogCtx),
+                  onPressed: loading ? () {} : () => Navigator.pop(dialogCtx),
                 ),
                 const SizedBox(width: 8),
                 AppDialog.actionButton(
@@ -918,13 +991,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _confirmCancelTrip() async {
+    final confirm = await AppDialog.confirm(
+      context: context,
+      icon: Icons.home_work_outlined,
+      iconColor: AppColors.orange,
+      title: 'Kembali ke Halaman Persiapan?',
+      message:
+          'Apakah Anda yakin ingin membatalkan mode perjalanan dan kembali ke Beranda Persiapan Driver?',
+      actionLabel: 'Ya, Kembali ke Beranda',
+      cancelLabel: 'Batal',
+    );
+
+    if (confirm == true && mounted) {
+      _stopwatchTimer?.cancel();
+      setState(() {
+        _isTripStarted = false;
+        _currentStage = TripStage.loadingGoods;
+      });
+      _showSnack('Kembali ke Halaman Beranda (Persiapan Driver).');
+    }
+  }
+
   Future<void> _confirmLogout() async {
     final confirm = await AppDialog.confirm(
       context: context,
       icon: Icons.logout_rounded,
       iconColor: AppColors.error,
       title: 'Konfirmasi Logout',
-      message: 'Apakah Anda yakin ingin keluar dari akun ini?',
+      message: _isTripStarted
+          ? 'Perjalanan sedang aktif. Apakah Anda yakin ingin membatalkan perjalanan & keluar dari akun ini?'
+          : 'Apakah Anda yakin ingin keluar dari akun ini?',
       actionLabel: 'Keluar',
       destructive: true,
     );
@@ -1048,7 +1145,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // Determine location name for the NEW stage (_currentStage)
     String? locationName = _currentSeller?.name;
-    if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
+    if (_currentStage == TripStage.enRoute ||
+        _currentStage == TripStage.arrived) {
       if (_allSellers.isNotEmpty &&
           _completedStops.length + 1 < _allSellers.length) {
         locationName = _allSellers[_completedStops.length + 1].name;
@@ -1064,7 +1162,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       longitude: _longitude,
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
-      durasiDetik: 0, // durasi dihitung dari selisih created_at antar event di web
+      durasiDetik:
+          0, // durasi dihitung dari selisih created_at antar event di web
       namaLokasi: locationName,
     );
 
@@ -1218,26 +1317,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               child: Row(
                 children: [
-                  // Logo
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
+                  if (_isTripStarted)
+                    IconButton(
+                      onPressed: _confirmCancelTrip,
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                      tooltip: 'Kembali ke Beranda Persiapan',
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Image.asset(
+                        'assets/images/logo_mustgo.png',
+                        width: 36,
+                        height: 36,
+                        errorBuilder: (context, error, stack) {
+                          return const Icon(
+                            Icons.local_shipping_rounded,
+                            size: 32,
+                            color: Colors.white,
+                          );
+                        },
+                      ),
                     ),
-                    child: Image.asset(
-                      'assets/images/logo_mustgo.png',
-                      width: 36,
-                      height: 36,
-                      errorBuilder: (context, error, stack) {
-                        return const Icon(
-                          Icons.local_shipping_rounded,
-                          size: 32,
-                          color: Colors.white,
-                        );
-                      },
-                    ),
-                  ),
                   const SizedBox(width: 14),
                   // Sapaan
                   Expanded(
@@ -1300,19 +1409,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             builder: (_) => const PermissionGuideScreen(),
                           ),
                         );
+                      } else if (value == 'reset_trip') {
+                        _confirmCancelTrip();
                       } else if (value == 'logout') {
-                        // Anti-manipulasi: selama trip aktif, logout diblokir —
-                        // driver gak bisa kabur dari tracking tengah jalan.
-                        if (_isTripStarted && !_isEntireRouteCompleted) {
-                          _showSnack(
-                            'Selesaikan perjalanan dulu sebelum logout.',
-                          );
-                          return;
-                        }
                         _confirmLogout();
                       }
                     },
                     itemBuilder: (_) => [
+                      if (_isTripStarted && !_isEntireRouteCompleted)
+                        const PopupMenuItem(
+                          value: 'reset_trip',
+                          height: 44,
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.home_work_outlined,
+                                size: 18,
+                                color: AppColors.orange,
+                              ),
+                              SizedBox(width: 10),
+                              Text('Kembali ke Beranda (Persiapan)'),
+                            ],
+                          ),
+                        ),
                       const PopupMenuItem(
                         value: 'password',
                         height: 44,
@@ -1436,6 +1555,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Tombol Kembali ke Beranda
+          _buildBackToHomeButton(),
+          const SizedBox(height: 12),
           // Current destination
           if (_currentSeller != null && !_isEntireRouteCompleted)
             _buildActiveTripSellerCard(),
@@ -1564,6 +1686,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ── Back to Home CTA button ──
+  Widget _buildBackToHomeButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 46,
+      child: OutlinedButton.icon(
+        onPressed: _confirmCancelTrip,
+        icon: const Icon(Icons.arrow_back_rounded, size: 18),
+        label: const Text(
+          'Kembali ke Beranda (Persiapan)',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppColors.navy,
+          side: const BorderSide(color: AppColors.navy, width: 1.5),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
       ),
     );
   }

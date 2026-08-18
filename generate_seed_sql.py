@@ -25,7 +25,12 @@ try:
     
     sql_statements = []
     sql_statements.append("BEGIN;")
-    sql_statements.append("DELETE FROM ritase WHERE tanggal = CURRENT_DATE;")
+    sql_statements.append("INSERT INTO gudang (id_gudang, nama_gudang) VALUES (3, 'Gudang 3') ON CONFLICT (id_gudang) DO NOTHING;")
+    sql_statements.append("INSERT INTO drop_point (id_drop_point, kode_dp, nama_drop_point, status) VALUES (3, 'DP-003', 'J&T Express Gateway SEG777', 'aktif') ON CONFLICT (id_drop_point) DO NOTHING;")
+    sql_statements.append("DELETE FROM armada_tracking WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);")
+    sql_statements.append("DELETE FROM ritase_event WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);")
+    sql_statements.append("DELETE FROM ritase_stop WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);")
+    sql_statements.append("DELETE FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL;")
     
     generated_count = 0
     for idx, row in df.iterrows():

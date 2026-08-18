@@ -61,7 +61,10 @@ class _LoginScreenState extends State<LoginScreen> {
           // Set identitas tracking dari akun yang login
           try {
             final cfg = await ApiClient.loadDriverConfig();
-            final idDriver = _toInt(user['id_driver'], fallback: cfg['id_driver'] ?? 0);
+            final idDriver = _toInt(
+              user['id_driver'],
+              fallback: cfg['id_driver'] ?? 0,
+            );
             var idKendaraan = cfg['id_kendaraan'] ?? 2;
             try {
               final res = await ApiClient.dio.get('/armada/ritase');
@@ -74,8 +77,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 final kid = _toInt(first['id_kendaraan']);
                 if (kid > 0) idKendaraan = kid;
               }
-            } catch (_) {/* fallback ke config */}
-            final driverName = (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver').toString();
+            } catch (_) {
+              /* fallback ke config */
+            }
+            final driverName =
+                (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
+                    .toString();
             await ApiClient.saveDriverConfig(
               idDriver: idDriver,
               idKendaraan: idKendaraan,
@@ -95,12 +102,17 @@ class _LoginScreenState extends State<LoginScreen> {
           if (!mounted) return;
           setState(() => _isLoading = false);
 
-          final nameToShow = user['username'] ?? user['nama'] ?? user['name'] ?? 'Driver';
+          final nameToShow =
+              user['username'] ?? user['nama'] ?? user['name'] ?? 'Driver';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Row(
                 children: [
-                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Text(
                     'Selamat datang, $nameToShow',
@@ -171,9 +183,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 'assets/images/map_bg.png',
                 fit: BoxFit.fitWidth,
                 alignment: Alignment.topCenter,
-                errorBuilder: (context, error, stackTrace) => Container(
-                  color: const Color(0xFFF8F9FA),
-                ),
+                errorBuilder: (context, error, stackTrace) =>
+                    Container(color: const Color(0xFFF8F9FA)),
               ),
             ),
           ),
@@ -228,7 +239,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(height: 8),
                           const Text(
-                            "Masuk untuk mengelola armada anda",
+                            "Silahkan login menggunakan akun anda masing masing",
                             style: TextStyle(
                               fontSize: 14,
                               color: Color(0xFF64748B),
@@ -242,12 +253,19 @@ class _LoginScreenState extends State<LoginScreen> {
                             controller: _usernameController,
                             decoration: InputDecoration(
                               labelText: 'Username',
-                              labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                              labelStyle: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                              ),
                               enabledBorder: const UnderlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFFCBD5E1)),
+                                borderSide: BorderSide(
+                                  color: Color(0xFFCBD5E1),
+                                ),
                               ),
                               focusedBorder: UnderlineInputBorder(
-                                borderSide: BorderSide(color: primaryBlue, width: 2),
+                                borderSide: BorderSide(
+                                  color: primaryBlue,
+                                  width: 2,
+                                ),
                               ),
                             ),
                           ),
@@ -260,12 +278,19 @@ class _LoginScreenState extends State<LoginScreen> {
                             obscureText: _isPasswordObscured,
                             decoration: InputDecoration(
                               labelText: 'Password',
-                              labelStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                              labelStyle: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                              ),
                               enabledBorder: const UnderlineInputBorder(
-                                borderSide: BorderSide(color: Color(0xFFCBD5E1)),
+                                borderSide: BorderSide(
+                                  color: Color(0xFFCBD5E1),
+                                ),
                               ),
                               focusedBorder: UnderlineInputBorder(
-                                borderSide: BorderSide(color: primaryBlue, width: 2),
+                                borderSide: BorderSide(
+                                  color: primaryBlue,
+                                  width: 2,
+                                ),
                               ),
                               suffixIcon: IconButton(
                                 icon: Icon(
@@ -351,7 +376,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 'assets/images/bottom_waves.png',
                 width: MediaQuery.of(context).size.width,
                 fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                errorBuilder: (context, error, stackTrace) =>
+                    const SizedBox.shrink(),
               ),
             ),
           ),

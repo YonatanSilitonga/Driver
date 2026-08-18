@@ -1,5 +1,10 @@
 BEGIN;
-DELETE FROM ritase WHERE tanggal = CURRENT_DATE;
+INSERT INTO gudang (id_gudang, nama_gudang) VALUES (3, 'Gudang 3') ON CONFLICT (id_gudang) DO NOTHING;
+INSERT INTO drop_point (id_drop_point, kode_dp, nama_drop_point, status) VALUES (3, 'DP-003', 'J&T Express Gateway SEG777', 'aktif') ON CONFLICT (id_drop_point) DO NOTHING;
+DELETE FROM armada_tracking WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);
+DELETE FROM ritase_event WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);
+DELETE FROM ritase_stop WHERE id_ritase IN (SELECT id_ritase FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL);
+DELETE FROM ritase WHERE tanggal = CURRENT_DATE OR tanggal IS NULL;
 
 DO $$
 DECLARE
@@ -224,8 +229,8 @@ BEGIN
     RETURNING id_ritase INTO new_ritase_id;
 
 
-    INSERT INTO ritase_stop (id_ritase, urutan, jenis_stop, id_gudang, keterangan)
-    VALUES (new_ritase_id, 1, 'gudang', 3, 'gudang 3');
+    INSERT INTO ritase_stop (id_ritase, urutan, jenis_stop, id_drop_point, keterangan)
+    VALUES (new_ritase_id, 1, 'drop_point', 3, 'drop_point 3');
 
 
     INSERT INTO ritase_stop (id_ritase, urutan, jenis_stop, id_gudang, keterangan)
