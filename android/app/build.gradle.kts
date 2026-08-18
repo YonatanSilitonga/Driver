@@ -37,6 +37,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Nama file APK hasil build: MUSTGO-v{versionName}-{abi}.apk
+    // (biar gak jadi app-arm64-v8a-release.apk yang bingung)
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val abi = output.filters.firstOrNull { it.filterType == "ABI" }?.identifier ?: "universal"
+            output.outputFileName = "MUSTGO-v${versionName}-${abi}.apk"
+        }
+    }
 }
 
 flutter {
