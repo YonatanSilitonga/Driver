@@ -141,6 +141,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   SellerDummy? _currentSeller;
   TripStage _currentStage = TripStage.loadingGoods;
 
+  // ── Jadwal aktif (belum dimulai user) ──
+  // Kalau server bilang ada ritase aktif, app TIDAK auto-start. Disimpan di
+  // sini dulu, user yang memutuskan mulai (tombol "Mulai/Lanjutkan"). Resume
+  // info dari server (current_stop_index/last_status) biar lanjut dari stop
+  // yang benar, bukan mulai ulang.
+  bool _hasActiveRitase = false;
+  int _pendingStopIndex = 0;
+  String _pendingLastStatus = '';
+  DateTime? _pendingStageStartedAt;
+
   final List<CompletedStop> _completedStops = [];
 
   final TextEditingController _awbInputController = TextEditingController(
@@ -330,14 +340,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
       // bukan mulai ulang dari stop pertama).
       final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
-      final statusRitase = (data['status'] ?? '').toString().toLowerCase();
       final lastStatus = data['last_status']?.toString() ?? '';
-      // Trip dianggap benar-benar sedang berjalan jika status ritase sudah 'berjalan'/'proses'
-      // ATAU sudah ada event status terakhir (misal: 'menuju', 'tiba', 'bongkar').
-      final isActuallyStarted =
-          statusRitase == 'berjalan' ||
-          statusRitase == 'proses' ||
-          lastStatus.isNotEmpty;
 
       // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
       bool routeChanged = false;
@@ -355,42 +358,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
 
+      // Anti-manipulasi: kalau trip SUDAH mulai di sesi ini, pertahankan
+      // state aktifnya (jangan reset walau ini hasil refresh).
+      if (_isTripStarted && _currentSeller != null) {
+        setState(() {
+          _idRitase = data['id_ritase'] ?? 0;
+          _isLastRitase = data['is_last_ritase'] == true;
+          _allSellers = parsedSellers;
+        });
+        await ApiClient.saveDriverConfig(
+          idDriver: _idDriver,
+          idKendaraan: _idKendaraan,
+          idRitase: _idRitase,
+        );
+        return;
+      }
+
+      // Belum mulai → simpan sebagai "jadwal aktif" yang menunggu keputusan
+      // user. Tombol Mulai/Lanjutkan muncul, bukan auto-start trip.
       setState(() {
         _idRitase = data['id_ritase'] ?? 0;
         _isLastRitase = data['is_last_ritase'] == true;
-        _allSellers = parsedSellers;
         _stageStartedAt = stageStartedAt;
 
-        if (!_isTripStarted || _currentSeller == null) {
-          final idx = stopIndex.clamp(0, parsedSellers.length - 1);
-          _currentSeller = parsedSellers.isNotEmpty ? parsedSellers[idx] : null;
-          _currentStage = _mapStatusToStage(lastStatus);
-          _activeStageSeconds = _stageStartedAt != null
-              ? DateTime.now().difference(_stageStartedAt!).inSeconds
-              : 0;
-          _isTripStarted = isActuallyStarted;
-          _isEntireRouteCompleted = false;
-          _currentStageDurations.clear();
-          _completedStops.clear();
-        } else {
-          // Update current seller reference to new stop list
-          final idx = _completedStops.length.clamp(0, parsedSellers.length - 1);
-          if (parsedSellers.isNotEmpty) {
-            _currentSeller = parsedSellers[idx];
-          }
-        }
+        _hasActiveRitase = true;
+        _pendingStopIndex = stopIndex;
+        _pendingLastStatus = lastStatus;
+        _pendingStageStartedAt = stageStartedAt;
+        _isTripStarted = false;
+        _isEntireRouteCompleted = false;
+        _currentSeller = null;
+        _currentStage = TripStage.loadingGoods;
+        _activeStageSeconds = 0;
+        _currentStageDurations.clear();
+        _completedStops.clear();
       });
 
       if (routeChanged && mounted) {
         _showRouteUpdatedNotification();
       }
 
-      // Timer stopwatch + GPS jalan terus selama trip aktif (aman dipanggil
-      // berulang — _startTimer cancel dulu yang lama).
       if (_isTripStarted && !_isEntireRouteCompleted) {
         _startTimer();
       }
-
       await ApiClient.saveDriverConfig(
         idDriver: _idDriver,
         idKendaraan: _idKendaraan,
@@ -401,6 +411,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _idRitase = 0;
         _isTripStarted = true;
         _isEntireRouteCompleted = true;
+        _hasActiveRitase = false;
       });
     } else {
       bool wasActive = _allSellers.isNotEmpty || _isTripStarted;
@@ -409,6 +420,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _allSellers.clear();
         _isTripStarted = false;
         _isEntireRouteCompleted = false;
+        _hasActiveRitase = false;
       });
       if (isSilentCheck && wasActive && mounted) {
         _showRouteDeletedNotification();
@@ -688,15 +700,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _fetchActiveRitase();
   }
 
-  void _startTripDirectly(SellerDummy seller) {
+  /// Mulai perjalanan dari tombol di beranda — kalau ada jadwal aktif,
+  /// RESUME dari progress terakhir (stop index + status dari server), bukan
+  /// mulai ulang dari stop pertama. User yang memutuskan kapan mulai.
+  void _startOrResumeTrip() {
+    if (_allSellers.isEmpty) return;
+
+    final hasProgress = _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty;
+    final idx = hasProgress
+        ? _pendingStopIndex.clamp(0, _allSellers.length - 1)
+        : 0;
+    final seller = _allSellers[idx];
+
     setState(() {
       _currentSeller = seller;
       _isTripStarted = true;
-      _currentStage = TripStage.loadingGoods;
-      // Stage baru dimulai SEKARANG — baseline waktu nyata, bukan dari timer
-      // yang pause saat layar mati. Durasi stage aktif = now - _stageStartedAt.
-      _stageStartedAt = DateTime.now();
-      _activeStageSeconds = 0;
+      _isEntireRouteCompleted = false;
+      _currentStage = hasProgress
+          ? _mapStatusToStage(_pendingLastStatus)
+          : TripStage.loadingGoods;
+      _stageStartedAt = hasProgress && _pendingStageStartedAt != null
+          ? _pendingStageStartedAt
+          : DateTime.now();
+      _activeStageSeconds = _stageStartedAt != null
+          ? DateTime.now().difference(_stageStartedAt!).inSeconds
+          : 0;
       _currentStageDurations.clear();
       _currentActualAwb = 0;
       _currentActualKoli = 0;
@@ -704,19 +732,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _awbInputController.text = '0';
       _koliInputController.text = '0';
       _ecerInputController.text = '0';
+      _hasActiveRitase = false;
+      _pendingStopIndex = 0;
+      _pendingLastStatus = '';
+      _pendingStageStartedAt = null;
     });
+
     _startTimer();
     _sendInstantTracking();
-    ApiClient.sendStatusUpdate(
-      idRitase: _idRitase,
-      status: 'mulai_loading',
-      latitude: _latitude,
-      longitude: _longitude,
-      koli: _currentActualKoli,
-      ecer: _currentActualEcer,
-      durasiDetik: 0,
-      namaLokasi: seller.name,
-    );
+    if (!hasProgress) {
+      // Benar-benar baru mulai → kirim event "mulai_loading" ke server.
+      ApiClient.sendStatusUpdate(
+        idRitase: _idRitase,
+        status: 'mulai_loading',
+        latitude: _latitude,
+        longitude: _longitude,
+        koli: _currentActualKoli,
+        ecer: _currentActualEcer,
+        durasiDetik: 0,
+        namaLokasi: seller.name,
+      );
+    }
   }
 
   void _sendInstantTracking({
@@ -1191,17 +1227,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _fetchActiveRitase();
 
     if (_idRitase != 0 && !wasLast) {
-      _showSnack('Berhasil lanjut ke rute berikutnya!');
-      setState(() {
-        _isTripStarted = true;
-        _currentStage = TripStage.loadingGoods;
-        _activeStageSeconds = 0;
-        // Kalau ritase baru belum punya event, baseline mulai dari sekarang.
-        _stageStartedAt ??= DateTime.now();
-        _currentStageDurations.clear();
-      });
-      _startTimer();
-      _sendInstantTracking();
+      // Ritase berikutnya tersedia → TIDAK auto-start. `_fetchActiveRitase`
+      // sudah menyimpan sebagai jadwal aktif (`_hasActiveRitase`), tinggal
+      // tampilkan tombol "Mulai Perjalanan" lagi — user yang memutuskan.
+      _showSnack('Rute berikutnya siap. Tekan Mulai Perjalanan untuk lanjut.');
     } else {
       setState(() {
         _isEntireRouteCompleted = true;
@@ -1525,6 +1554,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
+          // Info jadwal aktif: ada ritase di server yang menunggu keputusan
+          // driver (bukan auto-start) — biar jelas kenapa muncul tombol mulai.
+          if (_hasActiveRitase) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.warningBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.warning),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.event_available_rounded,
+                    color: AppColors.warning,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty
+                          ? 'Ada perjalanan yang belum selesai. Tekan '
+                              '"Lanjutkan Perjalanan" untuk melanjutkan.'
+                          : 'Jadwal perjalanan tersedia. Tekan "Mulai '
+                              'Perjalanan" saat siap berangkat.',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           // Empty state or CTA
           if (_allSellers.isEmpty)
             _buildEmptyState()
@@ -1716,6 +1783,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ── CTA button ──
   Widget _buildStartButton() {
+    final hasProgress =
+        _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty;
     return SizedBox(
       width: double.infinity,
       height: 54,
@@ -1725,13 +1794,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             setState(() {
               _completedStops.clear();
             });
-            _startTripDirectly(_allSellers.first);
+            _startOrResumeTrip();
           }
         },
-        icon: const Icon(Icons.play_arrow_rounded, size: 26),
-        label: const Text(
-          'Mulai Perjalanan',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        icon: Icon(
+          hasProgress
+              ? Icons.play_circle_outline_rounded
+              : Icons.play_arrow_rounded,
+          size: 26,
+        ),
+        label: Text(
+          hasProgress ? 'Lanjutkan Perjalanan' : 'Mulai Perjalanan',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.orange,
