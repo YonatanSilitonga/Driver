@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Watchdog alarm (android_alarm_manager_plus) — restart service kalau di-kill ROM -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <application
         android:label="MUSTGO"
         android:name="${applicationName}"
@@ -39,6 +44,34 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+    <!-- WAJIB (dokumentasi flutter_foreground_task v10): deklarasi service.
+             stopWithTask=false → service TETAP hidup walau app di-swipe dari
+             recents (krusial di ROM agresif kayak XOS Infinix yang suka
+             membersihkan background apps). Konsekuensi: onDestroy gak dipanggil
+             saat swipe → sinyal offline gak terkirim → backend tetap cap
+             OFFLINE via timeout 3 menit. Logout aman (stop eksplisit). -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="location"
+            android:exported="false"
+            android:stopWithTask="false" />
+        <!-- Watchdog alarm (android_alarm_manager_plus) — jalan di level sistem,
+             tetep kebangun walau app di-recent-cleared. -->
+        <service
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.AlarmService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false"/>
+        <receiver
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.AlarmBroadcastReceiver"
+            android:exported="false"/>
+        <receiver
+            android:name="dev.fluttercommunity.plus.androidalarmmanager.RebootBroadcastReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
