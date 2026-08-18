@@ -43,6 +43,7 @@ class CompletedStop {
   final int actualAwb;
   final int actualKoli;
   final int actualEcer;
+  final int actualHighValue;
   final int totalDurationSeconds;
   final Map<TripStage, int> stageDurations;
 
@@ -51,6 +52,7 @@ class CompletedStop {
     required this.actualAwb,
     required this.actualKoli,
     required this.actualEcer,
+    required this.actualHighValue,
     required this.totalDurationSeconds,
     required this.stageDurations,
   });
@@ -111,7 +113,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<SellerDummy> _allSellers = [];
-  bool _isLastRitase = false;
 
   String _getJenisLokasi(String? jenisStop) {
     if (jenisStop == 'gudang') return 'Gudang';
@@ -138,6 +139,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _isTripStarted = false;
   bool _isEntireRouteCompleted = false;
+  // State loading saat sedang memuat/memeriksa rute dari backend
+  bool _isFetchingRoute = true;
   // Setelah user tekan "Kembali ke Beranda" dari layar selesai,
   // tahan agar polling tidak langsung kembalikan layar completed.
   // Akan reset HANYA ketika server mengirim ritase aktif baru.
@@ -156,10 +159,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextEditingController _ecerInputController = TextEditingController(
     text: '0',
   );
+  final TextEditingController _highValueInputController =
+      TextEditingController(text: '0');
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
   int _currentActualEcer = 0;
+  int _currentActualHighValue = 0;
 
   Timer? _stopwatchTimer;
   Timer? _watchdogTimer;
@@ -301,128 +307,147 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchActiveRitase({bool isSilentCheck = false}) async {
-    if (_idKendaraan == 0) return;
+    if (_idKendaraan == 0) {
+      if (mounted) setState(() => _isFetchingRoute = false);
+      return;
+    }
 
-    final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
-    if (!mounted) return;
+    if (!isSilentCheck && mounted) {
+      setState(() => _isFetchingRoute = true);
+    }
 
-    if (data != null && data['has_active_ritase'] == true) {
-      // Ada ritase baru → izinkan completed state normal kembali
-      _suppressCompletedState = false;
-      final rawStops = data['stops'];
-      final stops = rawStops is List ? rawStops : const <dynamic>[];
-      final parsedSellers = stops.whereType<Map>().map((m) {
-        return SellerDummy(
-          id: (m['id_stop'] ?? '').toString(),
-          name: m['nama_lokasi']?.toString() ?? '',
-          address: m['alamat']?.toString() ?? '',
-          phone: m['no_hp']?.toString() ?? '-',
-          estimatedAwb: 20,
-          totalKoli: 15,
-          jenisStop: m['jenis_stop']?.toString() ?? 'seller',
-          latitude: m['latitude'] != null
-              ? (m['latitude'] as num).toDouble()
-              : null,
-          longitude: m['longitude'] != null
-              ? (m['longitude'] as num).toDouble()
-              : null,
+    try {
+      final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
+      if (!mounted) return;
+
+      if (data != null && data['has_active_ritase'] == true) {
+        // Ada ritase baru → izinkan completed state normal kembali
+        _suppressCompletedState = false;
+        final rawStops = data['stops'];
+        final stops = rawStops is List ? rawStops : const <dynamic>[];
+        final parsedSellers = stops.whereType<Map>().map((m) {
+          return SellerDummy(
+            id: (m['id_stop'] ?? '').toString(),
+            name: m['nama_lokasi']?.toString() ?? '',
+            address: m['alamat']?.toString() ?? '',
+            phone: m['no_hp']?.toString() ?? '-',
+            estimatedAwb: 20,
+            totalKoli: 15,
+            jenisStop: m['jenis_stop']?.toString() ?? 'seller',
+            latitude: m['latitude'] != null
+                ? (m['latitude'] as num).toDouble()
+                : null,
+            longitude: m['longitude'] != null
+                ? (m['longitude'] as num).toDouble()
+                : null,
+          );
+        }).toList();
+
+        final stageStartedAt = DateTime.tryParse(
+          data['stage_started_at']?.toString() ?? '',
         );
-      }).toList();
+        // Progress resume dari server: index stop yang sedang dikerjakan +
+        // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
+        // bukan mulai ulang dari stop pertama).
+        final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
+        final lastStatus = data['last_status']?.toString() ?? '';
 
-      final stageStartedAt = DateTime.tryParse(
-        data['stage_started_at']?.toString() ?? '',
-      );
-      // Progress resume dari server: index stop yang sedang dikerjakan +
-      // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
-      // bukan mulai ulang dari stop pertama).
-      final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
-      final lastStatus = data['last_status']?.toString() ?? '';
-
-      // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
-      bool routeChanged = false;
-      if (isSilentCheck && _allSellers.isNotEmpty) {
-        if (_allSellers.length != parsedSellers.length) {
-          routeChanged = true;
-        } else {
-          for (int i = 0; i < _allSellers.length; i++) {
-            if (_allSellers[i].id != parsedSellers[i].id ||
-                _allSellers[i].name != parsedSellers[i].name) {
-              routeChanged = true;
-              break;
+        // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
+        bool routeChanged = false;
+        if (isSilentCheck && _allSellers.isNotEmpty) {
+          if (_allSellers.length != parsedSellers.length) {
+            routeChanged = true;
+          } else {
+            for (int i = 0; i < _allSellers.length; i++) {
+              if (_allSellers[i].id != parsedSellers[i].id ||
+                  _allSellers[i].name != parsedSellers[i].name) {
+                routeChanged = true;
+                break;
+              }
             }
           }
         }
-      }
 
-      // Anti-manipulasi: kalau trip SUDAH mulai di sesi ini, pertahankan
-      // state aktifnya (jangan reset walau ini hasil refresh).
-      if (_isTripStarted && _currentSeller != null) {
+        // Anti-manipulasi: kalau trip SUDAH mulai di sesi ini, pertahankan
+        // state aktifnya (jangan reset walau ini hasil refresh).
+        if (_isTripStarted && _currentSeller != null) {
+          setState(() {
+            _idRitase = data['id_ritase'] ?? 0;
+            _allSellers = parsedSellers;
+          });
+          await ApiClient.saveDriverConfig(
+            idDriver: _idDriver,
+            idKendaraan: _idKendaraan,
+            idRitase: _idRitase,
+          );
+          return;
+        }
+
+        // Belum mulai → simpan sebagai "jadwal aktif" yang menunggu keputusan
+        // user. Tombol Mulai/Lanjutkan muncul, bukan auto-start trip.
         setState(() {
           _idRitase = data['id_ritase'] ?? 0;
-          _isLastRitase = data['is_last_ritase'] == true;
           _allSellers = parsedSellers;
+          _stageStartedAt = stageStartedAt;
+
+          if (!_isTripStarted || _currentSeller == null) {
+            final idx = stopIndex.clamp(0, parsedSellers.length - 1);
+            _currentSeller = parsedSellers.isNotEmpty
+                ? parsedSellers[idx]
+                : null;
+            _currentStage = _mapStatusToStage(lastStatus);
+            _activeStageSeconds = _stageStartedAt != null
+                ? DateTime.now().difference(_stageStartedAt!).inSeconds
+                : 0;
+            _isTripStarted = false;
+            _isEntireRouteCompleted = false;
+            _currentStageDurations.clear();
+            _completedStops.clear();
+          }
         });
+
+        if (routeChanged && mounted) {
+          _showRouteUpdatedNotification();
+        }
+
+        if (_isTripStarted && !_isEntireRouteCompleted) {
+          _startTimer();
+        }
         await ApiClient.saveDriverConfig(
           idDriver: _idDriver,
           idKendaraan: _idKendaraan,
           idRitase: _idRitase,
         );
-        return;
-      }
-
-      // Belum mulai → simpan sebagai "jadwal aktif" yang menunggu keputusan
-      // user. Tombol Mulai/Lanjutkan muncul, bukan auto-start trip.
-      setState(() {
-        _idRitase = data['id_ritase'] ?? 0;
-        _isLastRitase = data['is_last_ritase'] == true;
-        _allSellers = parsedSellers;
-        _stageStartedAt = stageStartedAt;
-
-        if (!_isTripStarted || _currentSeller == null) {
-          final idx = stopIndex.clamp(0, parsedSellers.length - 1);
-          _currentSeller = parsedSellers.isNotEmpty ? parsedSellers[idx] : null;
-          _currentStage = _mapStatusToStage(lastStatus);
-          _activeStageSeconds = _stageStartedAt != null
-              ? DateTime.now().difference(_stageStartedAt!).inSeconds
-              : 0;
+      } else if (data != null && data['all_completed'] == true) {
+        // Jika user baru saja tekan "Kembali ke Beranda" dari layar selesai,
+        // jangan tampilkan layar completed lagi sampai flag di-reset.
+        if (_suppressCompletedState) return;
+        setState(() {
+          _idRitase = 0;
+          _isTripStarted = false; // langsung ke beranda
+          _isEntireRouteCompleted = true;
+        });
+      } else {
+        bool wasActiveTrip = _isTripStarted && !_isEntireRouteCompleted;
+        setState(() {
+          _idRitase = 0;
+          _allSellers.clear();
           _isTripStarted = false;
-          _isEntireRouteCompleted = false;
-          _currentStageDurations.clear();
-          _completedStops.clear();
+          if (!wasActiveTrip && _isEntireRouteCompleted) {
+            // Pertahankan _isEntireRouteCompleted jika rute memang selesai normal
+          } else {
+            _isEntireRouteCompleted = false;
+          }
+        });
+        if (isSilentCheck && wasActiveTrip && mounted) {
+          _showRouteDeletedNotification();
         }
-      });
-
-      if (routeChanged && mounted) {
-        _showRouteUpdatedNotification();
       }
-
-      if (_isTripStarted && !_isEntireRouteCompleted) {
-        _startTimer();
-      }
-      await ApiClient.saveDriverConfig(
-        idDriver: _idDriver,
-        idKendaraan: _idKendaraan,
-        idRitase: _idRitase,
-      );
-    } else if (data != null && data['all_completed'] == true) {
-      // Jika user baru saja tekan "Kembali ke Beranda" dari layar selesai,
-      // jangan tampilkan layar completed lagi sampai flag di-reset.
-      if (_suppressCompletedState) return;
-      setState(() {
-        _idRitase = 0;
-        _isTripStarted = true;
-        _isEntireRouteCompleted = true;
-      });
-    } else {
-      bool wasActive = _allSellers.isNotEmpty || _isTripStarted;
-      setState(() {
-        _idRitase = 0;
-        _allSellers.clear();
-        _isTripStarted = false;
-        _isEntireRouteCompleted = false;
-      });
-      if (isSilentCheck && wasActive && mounted) {
-        _showRouteDeletedNotification();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFetchingRoute = false;
+        });
       }
     }
   }
@@ -587,6 +612,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _awbInputController.dispose();
     _koliInputController.dispose();
     _ecerInputController.dispose();
+    _highValueInputController.dispose();
     for (final c in _cardControllers) {
       c?.dispose();
     }
@@ -691,9 +717,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _currentActualAwb = 0;
       _currentActualKoli = 0;
       _currentActualEcer = 0;
+      _currentActualHighValue = 0;
       _awbInputController.text = '0';
       _koliInputController.text = '0';
       _ecerInputController.text = '0';
+      _highValueInputController.text = '0';
       _latitude = -6.2024;
       _longitude = 106.6522;
       _gpsTick = 0;
@@ -713,9 +741,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _currentActualAwb = 0;
       _currentActualKoli = 0;
       _currentActualEcer = 0;
+      _currentActualHighValue = 0;
       _awbInputController.text = '0';
       _koliInputController.text = '0';
       _ecerInputController.text = '0';
+      _highValueInputController.text = '0';
     });
 
     _startTimer();
@@ -727,6 +757,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       longitude: _longitude,
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
+      highValue: _currentActualHighValue,
       durasiDetik: 0,
       namaLokasi: seller.name,
     );
@@ -759,6 +790,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       status: _stageToStatusKey(targetStage),
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
+      highValue: _currentActualHighValue,
       durasiDetik: durasiDetik,
       idDriver: _idDriver,
       idKendaraan: _idKendaraan,
@@ -1108,8 +1140,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_currentStage == TripStage.loadingGoods) {
       final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? 0;
       final inputEcer = int.tryParse(_ecerInputController.text.trim()) ?? 0;
+      final inputHighValue =
+          int.tryParse(_highValueInputController.text.trim()) ?? 0;
       _currentActualKoli += inputKoli;
       _currentActualEcer += inputEcer;
+      _currentActualHighValue += inputHighValue;
     }
 
     final finishedStage = _currentStage;
@@ -1139,21 +1174,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 actualAwb: _currentActualAwb,
                 actualKoli: _currentActualKoli,
                 actualEcer: _currentActualEcer,
+                actualHighValue: _currentActualHighValue,
                 totalDurationSeconds: stopTotalDuration,
                 stageDurations: Map.from(_currentStageDurations),
               ),
             );
           }
           final nextOriginIndex = _completedStops.length;
-          if (nextOriginIndex < _allSellers.length - 1) {
+          if (nextOriginIndex < _allSellers.length) {
             _currentSeller = _allSellers[nextOriginIndex];
-            _currentStage = TripStage.loadingGoods;
+            _currentStage = TripStage.enRoute;
             _currentStageDurations.clear();
             _currentActualAwb = 0;
-            // koli & ecer NOT reset — carry forward running total across stops
+            _currentActualHighValue = 0;
             _awbInputController.text = '0';
             _koliInputController.text = '0';
             _ecerInputController.text = '0';
+            _highValueInputController.text = '0';
           } else {
             _currentStage = TripStage.completed;
           }
@@ -1167,17 +1204,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _stageStartedAt = DateTime.now();
     });
 
-    // Determine location name for the NEW stage (_currentStage)
-    String? locationName = _currentSeller?.name;
-    if (_currentStage == TripStage.enRoute ||
-        _currentStage == TripStage.arrived) {
-      if (_allSellers.isNotEmpty &&
-          _completedStops.length + 1 < _allSellers.length) {
-        locationName = _allSellers[_completedStops.length + 1].name;
-      }
-    } else if (_currentStage == TripStage.completed) {
-      locationName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
-    }
+    String? locationName = _currentSeller?.name ?? 'Selesai';
 
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
@@ -1186,45 +1213,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       longitude: _longitude,
       koli: _currentActualKoli,
       ecer: _currentActualEcer,
+      highValue: _currentActualHighValue,
       durasiDetik:
           0, // durasi dihitung dari selisih created_at antar event di web
       namaLokasi: locationName,
     );
 
     _sendInstantTracking(durasiDetik: finishedDuration);
-  }
-
-  Future<void> _finishEntireRoute() async {
-    final wasLast = _isLastRitase;
-    _stopTimer();
-
-    final success = await ApiClient.finishRitase(_idRitase);
-    if (!success) {
-      _showSnack('Gagal menyelesaikan ritase di server');
-      return;
-    }
-
-    setState(() {
-      _isTripStarted = false;
-      _completedStops.clear();
-      _currentStage = TripStage.loadingGoods;
-      _activeStageSeconds = 0;
-      _currentStageDurations.clear();
-    });
-
-    await _fetchActiveRitase();
-
-    if (_idRitase != 0 && !wasLast) {
-      // Ritase berikutnya tersedia → TIDAK auto-start. `_fetchActiveRitase`
-      // sudah menyimpan sebagai jadwal aktif (`_hasActiveRitase`), tinggal
-      // tampilkan tombol "Mulai Perjalanan" lagi — user yang memutuskan.
-      _showSnack('Rute berikutnya siap. Tekan Mulai Perjalanan untuk lanjut.');
-    } else {
-      setState(() {
-        _isEntireRouteCompleted = true;
-      });
-      _showSnack('Seluruh jadwal hari ini telah selesai!');
-    }
   }
 
   String _formatDuration(int seconds) {
@@ -1371,7 +1366,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Hai, $_driverName!',
+                          'Hallo driver $_driverName!',
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
@@ -1510,8 +1505,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ── Home body ──
   Widget _buildHomeBody() {
-    // Jika seluruh perjalanan sudah selesai → tampilkan kartu selesai
-    // di beranda (menggantikan VehicleCard + OriginCard + EmptyState).
+    // 1. Jika seluruh perjalanan sudah selesai → tampilkan kartu selesai
     if (_isEntireRouteCompleted) {
       return Padding(
         padding: const EdgeInsets.all(16),
@@ -1519,6 +1513,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
+    // 2. Jika sedang memeriksa rute → tampilkan kartu loading
+    if (_isFetchingRoute) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: _buildLoadingRouteCard(),
+      );
+    }
+
+    // 3. Jika belum ada rute dari admin → tampilkan HANYA kartu empty state
+    // (karena armada kendaraan & gudang asal belum ditugaskan untuk rute ini).
+    if (_allSellers.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: _buildEmptyState(),
+      );
+    }
+
+    // 4. Jika ada rute → tampilkan VehicleCard + OriginCard + Tombol Mulai
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       child: Column(
@@ -1551,11 +1563,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
-          // Empty state or CTA
-          if (_allSellers.isEmpty)
-            _buildEmptyState()
-          else
-            _buildStartButton(),
+          // CTA Button
+          _buildStartButton(),
           // Completed stops history
           if (_completedStops.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -1582,9 +1591,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _buildCompletedStopsHistoryCard(),
             const SizedBox(height: 12),
           ],
-          if (_isEntireRouteCompleted)
-            _buildEntireRouteCompletedCard()
-          else if (_currentStage == TripStage.completed)
+          if (_currentStage == TripStage.completed)
             _buildRitaseDoneCard()
           else ...[
             _buildTimelineStatusCard(),
@@ -1609,39 +1616,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       child: Column(
         children: [
-          const Icon(Icons.check_circle, color: AppColors.success, size: 48),
-          const SizedBox(height: 10),
-          Text(
-            'Semua ${_completedStops.length} titik stop selesai!',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
+          const Icon(
+            Icons.check_circle_outline_rounded,
+            color: AppColors.success,
+            size: 48,
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Ritase Ini Selesai!',
+            style: TextStyle(
+              fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: AppColors.success,
-              fontSize: 15,
+              color: AppColors.textPrimary,
             ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Seluruh stop pada ritase ini telah dikirim.',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
             height: 48,
             child: ElevatedButton.icon(
-              onPressed: _finishEntireRoute,
-              icon: Icon(
-                _isLastRitase
-                    ? Icons.check_circle_outline
-                    : Icons.arrow_forward,
-              ),
-              label: Text(
-                _isLastRitase ? 'Selesai' : 'Selesaikan & Lanjut Rute',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
+              onPressed: _finishCurrentRitaseAndNext,
+              icon: const Icon(Icons.arrow_forward_rounded, size: 20),
+              label: const Text(
+                'Selesaikan & Lanjut Ritase',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: _isLastRitase
-                    ? AppColors.success
-                    : AppColors.navy,
+                backgroundColor: AppColors.navy,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -1655,11 +1661,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ── Empty state ──
-  Widget _buildEmptyState() {
+  Future<void> _finishCurrentRitaseAndNext() async {
+    _stopTimer();
+    final success = await ApiClient.finishRitase(_idRitase);
+    if (!success) {
+      _showSnack('Gagal menyelesaikan ritase di server');
+      return;
+    }
+
+    setState(() {
+      _isTripStarted = false;
+      _completedStops.clear();
+      _currentStage = TripStage.loadingGoods;
+      _activeStageSeconds = 0;
+      _currentStageDurations.clear();
+    });
+
+    await _fetchActiveRitase();
+
+    if (_allSellers.isNotEmpty) {
+      _showSnack('Ritase berhasil diselesaikan! Rute berikutnya siap.');
+    } else {
+      _showSnack('Seluruh ritase hari ini telah selesai!');
+    }
+  }
+
+  // ── Loading Route Card ──
+  Widget _buildLoadingRouteCard() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
       decoration: BoxDecoration(
         color: AppColors.cardWhite,
         borderRadius: BorderRadius.circular(16),
@@ -1667,36 +1698,92 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       child: Column(
         children: [
-          Icon(Icons.route_outlined, size: 48, color: AppColors.textMuted),
-          const SizedBox(height: 12),
+          const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.8,
+              color: AppColors.navy,
+            ),
+          ),
+          const SizedBox(height: 14),
           const Text(
-            'Belum ada rute hari ini',
+            'Memeriksa Rute Perjalanan...',
             style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
               color: AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'Tunggu penugasan dari admin',
-            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
+          Text(
+            'Mohon tunggu sebentar',
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Empty state ──
+  Widget _buildEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.navy.withValues(alpha: 0.06),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.assignment_late_outlined,
+              size: 40,
+              color: AppColors.navy,
+            ),
           ),
           const SizedBox(height: 16),
+          const Text(
+            'Belum Ada Penugasan Rute',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Penugasan armada kendaraan dan gudang asal akan otomatis ditampilkan di sini setelah Admin memberikan jadwal rute.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
           OutlinedButton.icon(
             onPressed: () async {
               await _fetchActiveRitase();
             },
-            icon: const Icon(Icons.refresh, size: 18),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
             label: const Text(
-              'Refresh',
+              'Cek Penugasan Rute',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.navy,
-              side: const BorderSide(color: AppColors.navy),
+              side: const BorderSide(color: AppColors.navy, width: 1.5),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
           ),
@@ -1901,7 +1988,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         Text(
-                          '${stop.actualKoli} koli · ${stop.actualEcer} ecer · ${_formatReadableDuration(stop.totalDurationSeconds)}',
+                          '${stop.actualKoli} koli · ${stop.actualEcer} ecer · ${stop.actualHighValue} HV · ${_formatReadableDuration(stop.totalDurationSeconds)}',
                           style: TextStyle(
                             fontSize: 10,
                             color: AppColors.textSecondary,
@@ -1983,8 +2070,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 14),
           // Timeline
           _buildTimeline(),
-          // Input form during loading
-          if (_currentStage == TripStage.loadingGoods) ...[
+          // Input form during initial loading (hanya di titik asal muat barang)
+          if (_currentStage == TripStage.loadingGoods && _completedStops.isEmpty) ...[
             const SizedBox(height: 12),
             _buildDriverFriendlyInputForm(),
           ],
@@ -2236,7 +2323,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  'Input Muatan Barang',
+                  'Masukan Muatan Barang',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
@@ -2248,17 +2335,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 12),
           _buildVerticalStepperControl(
-            label: 'Jumlah Koli (Box/Paket)',
+            label: 'Jumlah Koli',
             controller: _koliInputController,
             icon: Icons.inventory_2,
             color: AppColors.orange,
           ),
           const SizedBox(height: 10),
           _buildVerticalStepperControl(
-            label: 'Jumlah Ecer (Pcs)',
+            label: 'Jumlah Ecer(Pcs)',
             controller: _ecerInputController,
             icon: Icons.widgets_outlined,
             color: const Color(0xFF1E88E5),
+          ),
+          const SizedBox(height: 10),
+          _buildVerticalStepperControl(
+            label: 'Jumlah High Value (Pcs)',
+            controller: _highValueInputController,
+            icon: Icons.workspace_premium_outlined,
+            color: const Color(0xFF8E24AA),
           ),
         ],
       ),
@@ -2471,19 +2565,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   String _getNextStageButtonLabel() {
-    String? destName;
-    if (_allSellers.isNotEmpty &&
-        _completedStops.length + 1 < _allSellers.length) {
-      destName = _allSellers[_completedStops.length + 1].name;
-    }
+    final isLastStop = _completedStops.length + 1 >= _allSellers.length;
 
     switch (_currentStage) {
       case TripStage.loadingGoods:
         return 'Selesai Loading → Berangkat';
       case TripStage.enRoute:
-        return 'Sudah Tiba di ${destName ?? 'Lokasi'}';
+        return 'Tiba di Lokasi';
       case TripStage.arrived:
-        return 'Mulai Bongkar Muat';
+        return isLastStop ? 'Selesai' : 'Tiba di Lokasi';
       case TripStage.completed:
         return 'Selesai Perjalanan';
     }
@@ -2504,7 +2594,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       child: Column(
         children: [
-          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 52),
+          const Icon(
+            Icons.check_circle_rounded,
+            color: AppColors.success,
+            size: 52,
+          ),
           const SizedBox(height: 12),
           const Text(
             'Perjalanan Selesai!',
@@ -2516,7 +2610,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 6),
           Text(
-            'Terima kasih sudah mengirim hari ini.',
+            'Anda sudah tidak memiliki jadwal perjalanan lagi, terima kasih sudah mengirim hari ini.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),

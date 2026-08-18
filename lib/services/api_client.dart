@@ -205,6 +205,7 @@ class ApiClient {
     required String status,
     int koli = 0,
     int ecer = 0,
+    int highValue = 0,
     int durasiDetik = 0,
     int idDriver = 0,
     int idKendaraan = 0,
@@ -220,7 +221,7 @@ class ApiClient {
     }
     try {
       print(
-        '📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli | Ecer: $ecer | Durasi: $durasiDetik dtk',
+        '📡 [GPS TRACKING] Mengirim: ($latitude, $longitude) | Status: $status | Koli: $koli | Ecer: $ecer | HV: $highValue | Durasi: $durasiDetik dtk',
       );
       final res = await dio.post(
         '/driver/tracking',
@@ -236,6 +237,7 @@ class ApiClient {
           'status': status,
           'jumlah_koli': koli,
           'jumlah_ecer': ecer,
+          'jumlah_high_value': highValue,
           'durasi_detik': durasiDetik,
           'nama_lokasi': namaLokasi,
         },
@@ -261,6 +263,7 @@ class ApiClient {
             'status': status,
             'jumlah_koli': koli,
             'jumlah_ecer': ecer,
+            'jumlah_high_value': highValue,
             'durasi_detik': durasiDetik,
           },
         );
@@ -279,12 +282,13 @@ class ApiClient {
     required double longitude,
     int koli = 0,
     int ecer = 0,
+    int highValue = 0,
     int durasiDetik = 0,
     String? namaLokasi,
   }) async {
     try {
       print(
-        '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer ($durasiDetik dtk)',
+        '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer | HV: $highValue ($durasiDetik dtk)',
       );
       final res = await dio.post(
         '/driver/trip-status',
@@ -296,6 +300,7 @@ class ApiClient {
           'longitude': longitude,
           'jumlah_koli': koli,
           'jumlah_ecer': ecer,
+          'jumlah_high_value': highValue,
           'durasi_detik': durasiDetik,
         },
       );
