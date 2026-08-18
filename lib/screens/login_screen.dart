@@ -4,6 +4,7 @@ import '../services/api_client.dart';
 import '../services/background_tracking.dart';
 import 'home_screen.dart';
 import 'forgot_password_screen.dart';
+import 'permission_guide_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -121,6 +122,10 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           );
 
+          // Guide izin muncul sekali (pertama install/login) — bisa dilewati.
+          await PermissionGuideScreen.maybeShowOnce(context);
+
+          if (!mounted) return;
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
               transitionDuration: const Duration(milliseconds: 400),

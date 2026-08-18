@@ -5,6 +5,7 @@ import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
+import 'permission_guide_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -107,6 +108,9 @@ class _SplashScreenState extends State<SplashScreen>
       await ApiClient.clearToken();
     }
 
+    if (!mounted) return;
+    // Guide izin muncul sekali (auto-login juga) — bisa dilewati.
+    await PermissionGuideScreen.maybeShowOnce(context);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
