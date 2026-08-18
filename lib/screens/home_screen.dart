@@ -138,18 +138,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _isTripStarted = false;
   bool _isEntireRouteCompleted = false;
+  // Setelah user tekan "Kembali ke Beranda" dari layar selesai,
+  // tahan agar polling tidak langsung kembalikan layar completed.
+  // Akan reset HANYA ketika server mengirim ritase aktif baru.
+  bool _suppressCompletedState = false;
   SellerDummy? _currentSeller;
   TripStage _currentStage = TripStage.loadingGoods;
-
-  // ── Jadwal aktif (belum dimulai user) ──
-  // Kalau server bilang ada ritase aktif, app TIDAK auto-start. Disimpan di
-  // sini dulu, user yang memutuskan mulai (tombol "Mulai/Lanjutkan"). Resume
-  // info dari server (current_stop_index/last_status) biar lanjut dari stop
-  // yang benar, bukan mulai ulang.
-  bool _hasActiveRitase = false;
-  int _pendingStopIndex = 0;
-  String _pendingLastStatus = '';
-  DateTime? _pendingStageStartedAt;
 
   final List<CompletedStop> _completedStops = [];
 
@@ -313,6 +307,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     if (data != null && data['has_active_ritase'] == true) {
+      // Ada ritase baru → izinkan completed state normal kembali
+      _suppressCompletedState = false;
       final rawStops = data['stops'];
       final stops = rawStops is List ? rawStops : const <dynamic>[];
       final parsedSellers = stops.whereType<Map>().map((m) {
@@ -379,19 +375,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _idRitase = data['id_ritase'] ?? 0;
         _isLastRitase = data['is_last_ritase'] == true;
+        _allSellers = parsedSellers;
         _stageStartedAt = stageStartedAt;
 
-        _hasActiveRitase = true;
-        _pendingStopIndex = stopIndex;
-        _pendingLastStatus = lastStatus;
-        _pendingStageStartedAt = stageStartedAt;
-        _isTripStarted = false;
-        _isEntireRouteCompleted = false;
-        _currentSeller = null;
-        _currentStage = TripStage.loadingGoods;
-        _activeStageSeconds = 0;
-        _currentStageDurations.clear();
-        _completedStops.clear();
+        if (!_isTripStarted || _currentSeller == null) {
+          final idx = stopIndex.clamp(0, parsedSellers.length - 1);
+          _currentSeller = parsedSellers.isNotEmpty ? parsedSellers[idx] : null;
+          _currentStage = _mapStatusToStage(lastStatus);
+          _activeStageSeconds = _stageStartedAt != null
+              ? DateTime.now().difference(_stageStartedAt!).inSeconds
+              : 0;
+          _isTripStarted = false;
+          _isEntireRouteCompleted = false;
+          _currentStageDurations.clear();
+          _completedStops.clear();
+        }
       });
 
       if (routeChanged && mounted) {
@@ -407,11 +405,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         idRitase: _idRitase,
       );
     } else if (data != null && data['all_completed'] == true) {
+      // Jika user baru saja tekan "Kembali ke Beranda" dari layar selesai,
+      // jangan tampilkan layar completed lagi sampai flag di-reset.
+      if (_suppressCompletedState) return;
       setState(() {
         _idRitase = 0;
         _isTripStarted = true;
         _isEntireRouteCompleted = true;
-        _hasActiveRitase = false;
       });
     } else {
       bool wasActive = _allSellers.isNotEmpty || _isTripStarted;
@@ -420,7 +420,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _allSellers.clear();
         _isTripStarted = false;
         _isEntireRouteCompleted = false;
-        _hasActiveRitase = false;
       });
       if (isSilentCheck && wasActive && mounted) {
         _showRouteDeletedNotification();
@@ -678,6 +677,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _resetSimulation() {
     _stopTimer();
+    // Tahan layar completed sampai ada ritase aktif baru dari server
+    _suppressCompletedState = true;
     setState(() {
       _isTripStarted = false;
       _isEntireRouteCompleted = false;
@@ -697,34 +698,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _longitude = 106.6522;
       _gpsTick = 0;
     });
+    // Langsung fetch sekali untuk update UI, tapi flag tetap aktif
     _fetchActiveRitase();
   }
 
-  /// Mulai perjalanan dari tombol di beranda — kalau ada jadwal aktif,
-  /// RESUME dari progress terakhir (stop index + status dari server), bukan
-  /// mulai ulang dari stop pertama. User yang memutuskan kapan mulai.
-  void _startOrResumeTrip() {
-    if (_allSellers.isEmpty) return;
-
-    final hasProgress = _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty;
-    final idx = hasProgress
-        ? _pendingStopIndex.clamp(0, _allSellers.length - 1)
-        : 0;
-    final seller = _allSellers[idx];
-
+  void _startTripDirectly(SellerDummy seller) {
     setState(() {
       _currentSeller = seller;
       _isTripStarted = true;
-      _isEntireRouteCompleted = false;
-      _currentStage = hasProgress
-          ? _mapStatusToStage(_pendingLastStatus)
-          : TripStage.loadingGoods;
-      _stageStartedAt = hasProgress && _pendingStageStartedAt != null
-          ? _pendingStageStartedAt
-          : DateTime.now();
-      _activeStageSeconds = _stageStartedAt != null
-          ? DateTime.now().difference(_stageStartedAt!).inSeconds
-          : 0;
+      _currentStage = TripStage.loadingGoods;
+      _stageStartedAt = DateTime.now();
+      _activeStageSeconds = 0;
       _currentStageDurations.clear();
       _currentActualAwb = 0;
       _currentActualKoli = 0;
@@ -732,27 +716,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _awbInputController.text = '0';
       _koliInputController.text = '0';
       _ecerInputController.text = '0';
-      _hasActiveRitase = false;
-      _pendingStopIndex = 0;
-      _pendingLastStatus = '';
-      _pendingStageStartedAt = null;
     });
 
     _startTimer();
     _sendInstantTracking();
-    if (!hasProgress) {
-      // Benar-benar baru mulai → kirim event "mulai_loading" ke server.
-      ApiClient.sendStatusUpdate(
-        idRitase: _idRitase,
-        status: 'mulai_loading',
-        latitude: _latitude,
-        longitude: _longitude,
-        koli: _currentActualKoli,
-        ecer: _currentActualEcer,
-        durasiDetik: 0,
-        namaLokasi: seller.name,
-      );
-    }
+    ApiClient.sendStatusUpdate(
+      idRitase: _idRitase,
+      status: 'mulai_loading',
+      latitude: _latitude,
+      longitude: _longitude,
+      koli: _currentActualKoli,
+      ecer: _currentActualEcer,
+      durasiDetik: 0,
+      namaLokasi: seller.name,
+    );
   }
 
   void _sendInstantTracking({
@@ -1028,6 +1005,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmCancelTrip() async {
+    // Jika perjalanan sudah selesai seluruhnya → langsung kembali ke beranda
+    // tanpa dialog konfirmasi, dan JANGAN reset state (biar kartu selesai
+    // tetap tampil di beranda).
+    if (_isEntireRouteCompleted) {
+      _stopwatchTimer?.cancel();
+      setState(() {
+        _isTripStarted = false;
+      });
+      return;
+    }
+
     final confirm = await AppDialog.confirm(
       context: context,
       icon: Icons.home_work_outlined,
@@ -1520,8 +1508,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ── Home body (before trip started) ──
+  // ── Home body ──
   Widget _buildHomeBody() {
+    // Jika seluruh perjalanan sudah selesai → tampilkan kartu selesai
+    // di beranda (menggantikan VehicleCard + OriginCard + EmptyState).
+    if (_isEntireRouteCompleted) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: _buildEntireRouteCompletedCard(),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       child: Column(
@@ -1554,57 +1551,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
-          // Info jadwal aktif: ada ritase di server yang menunggu keputusan
-          // driver (bukan auto-start) — biar jelas kenapa muncul tombol mulai.
-          if (_hasActiveRitase) ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.warningBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.warning),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.event_available_rounded,
-                    color: AppColors.warning,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty
-                          ? 'Ada perjalanan yang belum selesai. Tekan '
-                              '"Lanjutkan Perjalanan" untuk melanjutkan.'
-                          : 'Jadwal perjalanan tersedia. Tekan "Mulai '
-                              'Perjalanan" saat siap berangkat.',
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        color: AppColors.textPrimary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-          ],
           // Empty state or CTA
           if (_allSellers.isEmpty)
             _buildEmptyState()
           else
-            AnimatedOpacity(
-              opacity: _cardVisible[2] ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 400),
-              child: AnimatedSlide(
-                offset: _cardVisible[2] ? Offset.zero : const Offset(0, 0.1),
-                duration: const Duration(milliseconds: 400),
-                child: _buildStartButton(),
-              ),
-            ),
+            _buildStartButton(),
           // Completed stops history
           if (_completedStops.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -1622,9 +1573,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Tombol Kembali ke Beranda
-          _buildBackToHomeButton(),
-          const SizedBox(height: 12),
           // Current destination
           if (_currentSeller != null && !_isEntireRouteCompleted)
             _buildActiveTripSellerCard(),
@@ -1757,34 +1705,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ── Back to Home CTA button ──
-  Widget _buildBackToHomeButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 46,
-      child: OutlinedButton.icon(
-        onPressed: _confirmCancelTrip,
-        icon: const Icon(Icons.arrow_back_rounded, size: 18),
-        label: const Text(
-          'Kembali ke Beranda (Persiapan)',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-        ),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.navy,
-          side: const BorderSide(color: AppColors.navy, width: 1.5),
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-    );
-  }
-
   // ── CTA button ──
   Widget _buildStartButton() {
-    final hasProgress =
-        _pendingStopIndex > 0 || _pendingLastStatus.isNotEmpty;
     return SizedBox(
       width: double.infinity,
       height: 54,
@@ -1794,18 +1716,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             setState(() {
               _completedStops.clear();
             });
-            _startOrResumeTrip();
+            _startTripDirectly(_allSellers.first);
           }
         },
-        icon: Icon(
-          hasProgress
-              ? Icons.play_circle_outline_rounded
-              : Icons.play_arrow_rounded,
-          size: 26,
-        ),
-        label: Text(
-          hasProgress ? 'Lanjutkan Perjalanan' : 'Mulai Perjalanan',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        icon: const Icon(Icons.play_arrow_rounded, size: 26),
+        label: const Text(
+          'Mulai Perjalanan',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.orange,
@@ -2587,7 +2504,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events, color: AppColors.success, size: 52),
+          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 52),
           const SizedBox(height: 12),
           const Text(
             'Perjalanan Selesai!',
@@ -2603,18 +2520,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
-          const SizedBox(height: 20),
-          OutlinedButton.icon(
-            onPressed: _resetSimulation,
-            icon: const Icon(Icons.home),
-            label: const Text('Kembali ke Beranda'),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(double.infinity, 44),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          // Tombol reset hanya tampil di beranda (bukan di trip body)
+          if (!_isTripStarted) ...[
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: _resetSimulation,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Siap Perjalanan Baru'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(double.infinity, 44),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );

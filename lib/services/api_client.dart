@@ -8,11 +8,11 @@ class ApiClient {
   //   flutter run --dart-define=API_URL=<url>/api/v1
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://humble-pretext-crock.ngrok-free.dev/api/v1',
+    defaultValue: 'https://violator-krypton-image.ngrok-free.dev/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
@@ -53,10 +53,14 @@ class ApiClient {
           handler.next(options);
         },
         onError: (DioException e, handler) async {
+          final isNgrokOffline = e.response?.statusCode == 404 &&
+              (e.response?.data?.toString().contains('ngrok') ?? false);
           if ((e.type == DioExceptionType.connectionTimeout ||
-                  e.type == DioExceptionType.connectionError) &&
-              _activeBaseUrl == _defaultUrl) {
-            // ngrok tidak terjangkau -> coba LAN laptop sekali
+                  e.type == DioExceptionType.connectionError ||
+                  isNgrokOffline) &&
+              _activeBaseUrl == _defaultUrl &&
+              _fallbackUrl != _defaultUrl) {
+            // ngrok tidak terjangkau -> coba fallback
             _activeBaseUrl = _fallbackUrl;
             _dio = null;
             try {
