@@ -286,27 +286,32 @@ class ApiClient {
     int durasiDetik = 0,
     String? namaLokasi,
   }) async {
+    final payload = {
+      'id_ritase': idRitase,
+      'status': status,
+      'nama_lokasi': namaLokasi ?? '',
+      'latitude': latitude,
+      'longitude': longitude,
+      'jumlah_koli': koli,
+      'jumlah_ecer': ecer,
+      'jumlah_high_value': highValue,
+      'durasi_detik': durasiDetik,
+    };
     try {
       print(
         '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer | HV: $highValue ($durasiDetik dtk)',
       );
-      final res = await dio.post(
-        '/driver/trip-status',
-        data: {
-          'id_ritase': idRitase,
-          'status': status,
-          'nama_lokasi': namaLokasi ?? '',
-          'latitude': latitude,
-          'longitude': longitude,
-          'jumlah_koli': koli,
-          'jumlah_ecer': ecer,
-          'jumlah_high_value': highValue,
-          'durasi_detik': durasiDetik,
-        },
-      );
+      final res = await dio.post('/driver/trip-status', data: payload);
       print('✅ [STATUS] Tersimpan: ${res.data}');
     } catch (e) {
-      print('❌ [STATUS] Gagal mengirim: $e');
+      print('❌ [STATUS] Gagal mengirim, retry 2s: $e');
+      await Future.delayed(const Duration(seconds: 2));
+      try {
+        final res = await dio.post('/driver/trip-status', data: payload);
+        print('✅ [STATUS] Tersimpan setelah retry: ${res.data}');
+      } catch (e2) {
+        print('❌ [STATUS] Gagal mengirim setelah retry: $e2');
+      }
     }
   }
 

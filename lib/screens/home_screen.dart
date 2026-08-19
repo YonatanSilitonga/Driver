@@ -323,6 +323,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (data != null && data['has_active_ritase'] == true) {
         // Ada ritase baru → izinkan completed state normal kembali
         _suppressCompletedState = false;
+        final fetchedKendaraanId = (data['id_kendaraan'] as num?)?.toInt() ?? 0;
+        if (fetchedKendaraanId > 0) {
+          _idKendaraan = fetchedKendaraanId;
+        }
         if (data['plat_nomor'] != null && data['plat_nomor'].toString().isNotEmpty) {
           _selectedVehiclePlat = data['plat_nomor'].toString();
         }
@@ -405,7 +409,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _activeStageSeconds = _stageStartedAt != null
                 ? DateTime.now().difference(_stageStartedAt!).inSeconds
                 : 0;
-            _isTripStarted = false;
+            _isTripStarted = lastStatus.isNotEmpty && !lastStatus.toLowerCase().contains('selesai');
             _isEntireRouteCompleted = false;
             _currentStageDurations.clear();
             _completedStops.clear();
@@ -460,11 +464,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Map status event server → stage mobile (buat resume setelah app di-kill).
   TripStage _mapStatusToStage(String status) {
-    final s = status.toLowerCase();
-    if (s.contains('menuju')) return TripStage.enRoute;
-    if (s.contains('tiba')) return TripStage.arrived;
+    final s = status.toLowerCase().trim();
+    if (s.contains('menuju') || s.contains('berangkat') || s.contains('keluar')) return TripStage.enRoute;
+    if (s.contains('tiba') || s.contains('sampai')) return TripStage.arrived;
     if (s.contains('selesai')) return TripStage.completed;
-    return TripStage.loadingGoods; // bongkar muat / default
+    if (s.contains('muat') || s.contains('loading') || s.contains('bongkar')) return TripStage.loadingGoods;
+    return TripStage.loadingGoods;
   }
 
   Future<void> _ensureLocationPermission() async {
@@ -1247,6 +1252,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     String? locationName = _currentSeller?.name ?? 'Selesai';
+    if (_currentStage == TripStage.enRoute) {
+      final nextIdx = _completedStops.length + 1;
+      if (nextIdx < _allSellers.length) {
+        locationName = _allSellers[nextIdx].name;
+      }
+    }
 
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
@@ -1881,22 +1892,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ── CTA button ──
   Widget _buildStartButton() {
+    final bool hasActiveTrip = _idRitase > 0 &&
+        _currentStage != TripStage.completed;
+    final String buttonText =
+        hasActiveTrip ? 'Lanjutkan Perjalanan' : 'Mulai Perjalanan';
+
     return SizedBox(
       width: double.infinity,
       height: 54,
       child: ElevatedButton.icon(
         onPressed: () {
           if (_allSellers.isNotEmpty) {
-            setState(() {
-              _completedStops.clear();
-            });
-            _startTripDirectly(_allSellers.first);
+            if (hasActiveTrip) {
+              setState(() {
+                _isTripStarted = true;
+              });
+              _startTimer();
+            } else {
+              setState(() {
+                _completedStops.clear();
+              });
+              _startTripDirectly(_allSellers.first);
+            }
           }
         },
         icon: const Icon(Icons.play_arrow_rounded, size: 26),
-        label: const Text(
-          'Mulai Perjalanan',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        label: Text(
+          buttonText,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.orange,

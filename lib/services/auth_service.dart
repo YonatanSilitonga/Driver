@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'api_client.dart';
+import 'background_tracking.dart';
 
 class AuthService {
   /// Login dengan email & password
@@ -55,10 +56,13 @@ class AuthService {
   /// Logout: hapus token dari server dan dari HP
   static Future<void> logout() async {
     try {
+      await sendOfflineSignal();
+      await stopBackgroundTracking();
       await ApiClient.dio.post('/auth/logout');
     } catch (_) {
       // Abaikan error jaringan saat logout
     } finally {
+      await ApiClient.clearDriverConfig();
       await ApiClient.clearToken();
     }
   }
