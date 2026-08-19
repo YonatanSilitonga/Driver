@@ -307,7 +307,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _fetchActiveRitase({bool isSilentCheck = false}) async {
-    if (_idKendaraan == 0) {
+    if (_idDriver == 0) {
       if (mounted) setState(() => _isFetchingRoute = false);
       return;
     }
@@ -323,6 +323,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (data != null && data['has_active_ritase'] == true) {
         // Ada ritase baru → izinkan completed state normal kembali
         _suppressCompletedState = false;
+        if (data['plat_nomor'] != null && data['plat_nomor'].toString().isNotEmpty) {
+          _selectedVehiclePlat = data['plat_nomor'].toString();
+        }
+        if (data['jenis_kendaraan'] != null && data['jenis_kendaraan'].toString().isNotEmpty) {
+          _selectedVehicleType = data['jenis_kendaraan'].toString();
+        }
         final rawStops = data['stops'];
         final stops = rawStops is List ? rawStops : const <dynamic>[];
         final parsedSellers = stops.whereType<Map>().map((m) {
@@ -802,13 +808,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _stageToStatusKey(TripStage stage) {
     switch (stage) {
       case TripStage.loadingGoods:
-        return 'mulai_loading';
+        return 'Bongkar Muat Barang';
       case TripStage.enRoute:
-        return 'menuju_seller';
+        return 'Sedang Menuju';
       case TripStage.arrived:
-        return 'tiba';
+        return 'Tiba';
       case TripStage.completed:
-        return 'selesai';
+        return 'Selesai';
     }
   }
 
@@ -819,12 +825,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _completedStops.length + 1 < _allSellers.length) {
       destName = _allSellers[_completedStops.length + 1].name;
     }
+    final currentLocName = _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
+        ? _allSellers[_completedStops.length].name
+        : (_currentSeller?.name ?? currLoc);
 
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Bongkar Muat Barang';
+        return 'Bongkar Muat di $currentLocName';
       case TripStage.enRoute:
-        return 'Menuju ${destName ?? currLoc}';
+        return 'Sedang Menuju ${destName ?? currLoc}';
       case TripStage.arrived:
         return 'Tiba di ${destName ?? currLoc}';
       case TripStage.completed:
@@ -1157,12 +1166,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       switch (_currentStage) {
         case TripStage.loadingGoods:
-          _currentStage = TripStage.enRoute;
+          final isLastStop = _completedStops.length + 1 >= _allSellers.length;
+          if (isLastStop) {
+            // Selesai bongkar muat di stop terakhir (Gateway)
+            if (_currentSeller != null) {
+              final stopTotalDuration = _currentStageDurations.values.fold(
+                0,
+                (sum, dur) => sum + dur,
+              );
+              _completedStops.add(
+                CompletedStop(
+                  seller: _currentSeller!,
+                  actualAwb: _currentActualAwb,
+                  actualKoli: _currentActualKoli,
+                  actualEcer: _currentActualEcer,
+                  actualHighValue: _currentActualHighValue,
+                  totalDurationSeconds: stopTotalDuration,
+                  stageDurations: Map.from(_currentStageDurations),
+                ),
+              );
+            }
+            _currentStage = TripStage.completed;
+            _isEntireRouteCompleted = true;
+          } else {
+            // Selesai muat barang di stop saat ini -> berangkat menuju stop berikutnya
+            _currentStage = TripStage.enRoute;
+          }
           break;
+
         case TripStage.enRoute:
+          // Dalam perjalanan -> tiba di lokasi tujuan
           _currentStage = TripStage.arrived;
           break;
+
         case TripStage.arrived:
+          // Tiba di lokasi -> mulai proses bongkar muat di lokasi tersebut
           if (_currentSeller != null) {
             final stopTotalDuration = _currentStageDurations.values.fold(
               0,
@@ -1183,9 +1221,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final nextOriginIndex = _completedStops.length;
           if (nextOriginIndex < _allSellers.length) {
             _currentSeller = _allSellers[nextOriginIndex];
-            _currentStage = TripStage.enRoute;
+            _currentStage = TripStage.loadingGoods;
             _currentStageDurations.clear();
             _currentActualAwb = 0;
+            _currentActualKoli = 0;
+            _currentActualEcer = 0;
             _currentActualHighValue = 0;
             _awbInputController.text = '0';
             _koliInputController.text = '0';
@@ -1193,8 +1233,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _highValueInputController.text = '0';
           } else {
             _currentStage = TripStage.completed;
+            _isEntireRouteCompleted = true;
           }
           break;
+
         case TripStage.completed:
           break;
       }
@@ -1373,16 +1415,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             color: Colors.white,
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _isTripStarted
-                              ? _currentStageTitle
-                              : 'Siap bertugas hari ini?',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.white.withValues(alpha: 0.7),
+                        const SizedBox(height: 3),
+                        if (_selectedVehiclePlat != null &&
+                            _selectedVehiclePlat!.isNotEmpty)
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.22),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.35),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Text(
+                                  _selectedVehiclePlat!,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
+                              if (_selectedVehicleType != null &&
+                                  _selectedVehicleType!.isNotEmpty) ...[
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    _selectedVehicleType!,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white.withValues(alpha: 0.85),
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          )
+                        else
+                          Text(
+                            _isTripStarted
+                                ? _currentStageTitle
+                                : 'Siap bertugas hari ini?',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white.withValues(alpha: 0.7),
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ),
@@ -2070,8 +2157,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 14),
           // Timeline
           _buildTimeline(),
-          // Input form during initial loading (hanya di titik asal muat barang)
-          if (_currentStage == TripStage.loadingGoods && _completedStops.isEmpty) ...[
+          // Input form during loading stage (di setiap titik muat barang)
+          if (_currentStage == TripStage.loadingGoods) ...[
             const SizedBox(height: 12),
             _buildDriverFriendlyInputForm(),
           ],
@@ -2566,14 +2653,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _getNextStageButtonLabel() {
     final isLastStop = _completedStops.length + 1 >= _allSellers.length;
+    String? nextDestName;
+    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+      nextDestName = _allSellers[_completedStops.length + 1].name;
+    }
+    final currentOriginName = _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
+        ? _allSellers[_completedStops.length].name
+        : (_currentSeller?.name ?? 'Lokasi');
 
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Selesai Loading → Berangkat';
+        return isLastStop
+            ? 'Selesai Bongkar → Selesai Perjalanan'
+            : 'Selesai Muat → Berangkat';
       case TripStage.enRoute:
-        return 'Tiba di Lokasi';
+        return 'Tiba di ${nextDestName ?? currentOriginName}';
       case TripStage.arrived:
-        return isLastStop ? 'Selesai' : 'Tiba di Lokasi';
+        final arrivedLoc = nextDestName ?? currentOriginName;
+        return isLastStop
+            ? 'Mulai Bongkar di $arrivedLoc'
+            : 'Mulai Bongkar Muat di $arrivedLoc';
       case TripStage.completed:
         return 'Selesai Perjalanan';
     }
