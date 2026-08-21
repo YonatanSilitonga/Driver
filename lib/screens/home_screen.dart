@@ -1089,7 +1089,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _userReturnedToHome = true;
         _isTripStarted = false;
-        _currentStage = TripStage.loadingGoods;
       });
       _showSnack('Kembali ke Halaman Beranda (Persiapan Driver).');
     }
