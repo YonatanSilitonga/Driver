@@ -185,6 +185,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _idKendaraan = 2;
   int _idRitase = 4;
   String _driverName = 'AWALUDIN';
+  bool _hasLoadedBackendSellers = false;
+  bool _userReturnedToHome = false;
 
   // ── Konstanta Smart GPS Tracking ──
   static const int _gpsRefreshEveryTicks = 8;
@@ -364,7 +366,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
         bool routeChanged = false;
-        if (isSilentCheck && _allSellers.isNotEmpty) {
+        if (isSilentCheck && _hasLoadedBackendSellers && _allSellers.isNotEmpty) {
           if (_allSellers.length != parsedSellers.length) {
             routeChanged = true;
           } else {
@@ -378,6 +380,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
         }
 
+        _hasLoadedBackendSellers = true;
+
         // Anti-manipulasi: kalau trip SUDAH mulai di sesi ini, pertahankan
         // state aktifnya (jangan reset walau ini hasil refresh).
         if (_isTripStarted && _currentSeller != null) {
@@ -385,6 +389,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _idRitase = data['id_ritase'] ?? 0;
             _allSellers = parsedSellers;
           });
+          if (routeChanged && mounted) {
+            _showRouteUpdatedNotification();
+          }
           await ApiClient.saveDriverConfig(
             idDriver: _idDriver,
             idKendaraan: _idKendaraan,
@@ -409,7 +416,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _activeStageSeconds = _stageStartedAt != null
                 ? DateTime.now().difference(_stageStartedAt!).inSeconds
                 : 0;
-            _isTripStarted = lastStatus.isNotEmpty && !lastStatus.toLowerCase().contains('selesai');
+            if (!_userReturnedToHome) {
+              _isTripStarted = lastStatus.isNotEmpty && !lastStatus.toLowerCase().contains('selesai');
+            } else {
+              _isTripStarted = false;
+            }
             _isEntireRouteCompleted = false;
             _currentStageDurations.clear();
             _completedStops.clear();
@@ -1076,6 +1087,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (confirm == true && mounted) {
       _stopwatchTimer?.cancel();
       setState(() {
+        _userReturnedToHome = true;
         _isTripStarted = false;
         _currentStage = TripStage.loadingGoods;
       });
@@ -1905,11 +1917,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (_allSellers.isNotEmpty) {
             if (hasActiveTrip) {
               setState(() {
+                _userReturnedToHome = false;
                 _isTripStarted = true;
               });
               _startTimer();
             } else {
               setState(() {
+                _userReturnedToHome = false;
                 _completedStops.clear();
               });
               _startTripDirectly(_allSellers.first);
