@@ -18,7 +18,7 @@ import 'api_client.dart';
 ///   - HP Xiaomi/OPPO/Vivo: exempt dari battery optimization biar gak di-kill.
 final _kBaseUrl = String.fromEnvironment(
   'API_URL',
-  defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  defaultValue: 'http://10.218.47.182:8080/api/v1',
 );
 
 /// Dio khusus background — pakai token dari penyimpanan (WAJIB, endpoint /driver/* JWT).

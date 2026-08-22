@@ -187,6 +187,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _driverName = 'AWALUDIN';
   bool _hasLoadedBackendSellers = false;
   bool _userReturnedToHome = false;
+  String? _scheduleWarning;
+  bool _canStart = true;
+  bool _scheduleBlocked = false;
+  String? _nextScheduleJamMulai;
+  String? _nextScheduleJamSelesai;
+  String? _nextScheduleJenisRitase;
 
   // ── Konstanta Smart GPS Tracking ──
   static const int _gpsRefreshEveryTicks = 8;
@@ -323,8 +329,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
 
       if (data != null && data['has_active_ritase'] == true) {
+        
         // Ada ritase baru → izinkan completed state normal kembali
         _suppressCompletedState = false;
+        _scheduleBlocked = false;
         final fetchedKendaraanId = (data['id_kendaraan'] as num?)?.toInt() ?? 0;
         if (fetchedKendaraanId > 0) {
           _idKendaraan = fetchedKendaraanId;
@@ -388,6 +396,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           setState(() {
             _idRitase = data['id_ritase'] ?? 0;
             _allSellers = parsedSellers;
+            _scheduleWarning = data['schedule_warning']?.toString();
+            _canStart = data['can_start'] ?? true;
           });
           if (routeChanged && mounted) {
             _showRouteUpdatedNotification();
@@ -406,6 +416,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _idRitase = data['id_ritase'] ?? 0;
           _allSellers = parsedSellers;
           _stageStartedAt = stageStartedAt;
+
+          _scheduleWarning = data['schedule_warning']?.toString();
+          _canStart = data['can_start'] ?? true;
 
           if (!_isTripStarted || _currentSeller == null) {
             final idx = stopIndex.clamp(0, parsedSellers.length - 1);
@@ -447,13 +460,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _idRitase = 0;
           _isTripStarted = false; // langsung ke beranda
           _isEntireRouteCompleted = true;
+          _scheduleBlocked = false;
         });
       } else {
         bool wasActiveTrip = _isTripStarted && !_isEntireRouteCompleted;
+        final bool blocked = data != null && data['schedule_blocked'] == true;
+        String? nextJamMulai;
+        String? nextJamSelesai;
+        String? nextJenisRitase;
+        if (blocked && data['next_schedule'] != null) {
+          final ns = data['next_schedule'] as Map<String, dynamic>;
+          nextJamMulai = ns['jam_mulai']?.toString();
+          nextJamSelesai = ns['jam_selesai']?.toString();
+          nextJenisRitase = ns['jenis_ritase']?.toString();
+        }
         setState(() {
           _idRitase = 0;
           _allSellers.clear();
           _isTripStarted = false;
+          _scheduleBlocked = blocked;
+          _nextScheduleJamMulai = nextJamMulai;
+          _nextScheduleJamSelesai = nextJamSelesai;
+          _nextScheduleJenisRitase = nextJenisRitase;
           if (!wasActiveTrip && _isEntireRouteCompleted) {
             // Pertahankan _isEntireRouteCompleted jika rute memang selesai normal
           } else {
@@ -1630,7 +1658,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    // 3. Jika belum ada rute dari admin → tampilkan HANYA kartu empty state
+    // 3. Jika jadwal ada tapi belum waktunya → tampilkan info jadwal belum dimulai
+    if (_scheduleBlocked && _allSellers.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: _buildScheduleNotYetState(),
+      );
+    }
+
+    // 4. Jika belum ada rute dari admin → tampilkan HANYA kartu empty state
     // (karena armada kendaraan & gudang asal belum ditugaskan untuk rute ini).
     if (_allSellers.isEmpty) {
       return Padding(
@@ -1639,13 +1675,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    // 4. Jika ada rute → tampilkan VehicleCard + OriginCard + Tombol Mulai
+    // 5. Jika ada rute → tampilkan VehicleCard + OriginCard + Tombol Mulai
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Vehicle
+          // Vehicle Card
           AnimatedOpacity(
             opacity: _cardVisible[0] ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 400),
@@ -1661,7 +1697,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
-          // Origin
+          // Origin Card
           AnimatedOpacity(
             opacity: _cardVisible[1] ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 400),
@@ -1672,8 +1708,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 12),
+
+          // 👇 BANNER STATUS JADWAL / TEST MODE 👇
+          _buildScheduleWarningBanner(),
+
           // CTA Button
           _buildStartButton(),
+
           // Completed stops history
           if (_completedStops.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -1901,6 +1942,145 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // ── Schedule not yet started state ──
+  Widget _buildScheduleNotYetState() {
+    String formatJam(String? jam) {
+      if (jam == null || jam.isEmpty) return '--:--';
+      final parts = jam.split(':');
+      if (parts.length >= 2) return '${parts[0]}:${parts[1]}';
+      return jam;
+    }
+
+    final mulai = formatJam(_nextScheduleJamMulai);
+    final selesai = formatJam(_nextScheduleJamSelesai);
+    final jenis = (_nextScheduleJenisRitase ?? 'outgoing').toUpperCase();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.borderLight),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A73E8).withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.schedule_outlined,
+              size: 40,
+              color: Color(0xFF1A73E8),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Jadwal Belum Dimulai',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Rute perjalanan akan aktif pada jam yang telah ditentukan.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A73E8).withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.access_time_rounded, size: 18, color: Color(0xFF1A73E8)),
+                const SizedBox(width: 8),
+                Text(
+                  '$jenis: $mulai - $selesai',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1A73E8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await _fetchActiveRitase();
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text(
+              'Segarkan',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.navy,
+              side: const BorderSide(color: AppColors.navy, width: 1.5),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+// ── Banner Peringatan Jadwal ──
+  Widget _buildScheduleWarningBanner() {
+    if (_scheduleWarning == null || _scheduleWarning!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1), // Warna kuning muda
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFE082), width: 1.2),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.info_outline_rounded,
+            color: AppColors.orange,
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _scheduleWarning!,
+              style: const TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF5D4037),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
   // ── CTA button ──
   Widget _buildStartButton() {
     final bool hasActiveTrip = _idRitase > 0 &&

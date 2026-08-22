@@ -8,11 +8,11 @@ class ApiClient {
   //   flutter run --dart-define=API_URL=<url>/api/v1
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://10.218.47.182:8080/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://10.218.47.182:8080/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
