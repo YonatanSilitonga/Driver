@@ -25,8 +25,8 @@ final _kBaseUrl = String.fromEnvironment(
 Future<Dio> _bgDio() async {
   final dio = Dio(BaseOptions(
     baseUrl: _kBaseUrl,
-    connectTimeout: const Duration(seconds: 8),
-    receiveTimeout: const Duration(seconds: 12),
+    connectTimeout: const Duration(seconds: 20),
+    receiveTimeout: const Duration(seconds: 25),
     headers: {
       'Accept': 'application/json',
       'Content-Type': 'application/json',

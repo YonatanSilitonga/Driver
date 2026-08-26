@@ -12,7 +12,7 @@ class ApiClient {
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'api.controltowerslb.tech/api/v1',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
@@ -31,8 +31,8 @@ class ApiClient {
     final dio = Dio(
       BaseOptions(
         baseUrl: _activeBaseUrl,
-        connectTimeout: const Duration(seconds: 8),
-        receiveTimeout: const Duration(seconds: 12),
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 25),
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -285,6 +285,7 @@ class ApiClient {
     int highValue = 0,
     int durasiDetik = 0,
     String? namaLokasi,
+    String? fotoManifestUrl,
   }) async {
     final payload = {
       'id_ritase': idRitase,
@@ -296,10 +297,11 @@ class ApiClient {
       'jumlah_ecer': ecer,
       'jumlah_high_value': highValue,
       'durasi_detik': durasiDetik,
+      'foto_manifest_url': fotoManifestUrl ?? '',
     };
     try {
       print(
-        '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer | HV: $highValue ($durasiDetik dtk)',
+        '📤 [STATUS] Update ritase=$idRitase -> $status | Loc: $namaLokasi | Koli: $koli | Ecer: $ecer | HV: $highValue | Foto: $fotoManifestUrl ($durasiDetik dtk)',
       );
       final res = await dio.post('/driver/trip-status', data: payload);
       print('✅ [STATUS] Tersimpan: ${res.data}');
@@ -312,6 +314,36 @@ class ApiClient {
       } catch (e2) {
         print('❌ [STATUS] Gagal mengirim setelah retry: $e2');
       }
+    }
+  }
+
+  // Upload foto bukti manifest dari driver
+  static Future<String?> uploadManifestPhoto({
+    required int idRitase,
+    required String filePath,
+    String? namaLokasi,
+    int? idStop,
+  }) async {
+    try {
+      print('📤 [UPLOAD MANIFEST] Mengunggah foto: $filePath...');
+      final formData = FormData.fromMap({
+        'id_ritase': idRitase,
+        'nama_lokasi': namaLokasi ?? '',
+        'id_stop': idStop ?? 0,
+        'file': await MultipartFile.fromFile(
+          filePath,
+          filename: 'manifest.webp',
+        ),
+      });
+      final res = await dio.post('/driver/upload-manifest', data: formData);
+      print('✅ [UPLOAD MANIFEST] Berhasil: ${res.data}');
+      if (res.statusCode == 200 && res.data != null && res.data['data'] != null) {
+        return res.data['data']['photo_url']?.toString();
+      }
+      return null;
+    } catch (e) {
+      print('❌ [UPLOAD MANIFEST] Gagal: $e');
+      return null;
     }
   }
 

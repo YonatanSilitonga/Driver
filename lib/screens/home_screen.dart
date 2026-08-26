@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
@@ -141,10 +143,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isEntireRouteCompleted = false;
   // State loading saat sedang memuat/memeriksa rute dari backend
   bool _isFetchingRoute = true;
-  // Setelah user tekan "Kembali ke Beranda" dari layar selesai,
-  // tahan agar polling tidak langsung kembalikan layar completed.
-  // Akan reset HANYA ketika server mengirim ritase aktif baru.
-  bool _suppressCompletedState = false;
   SellerDummy? _currentSeller;
   TripStage _currentStage = TripStage.loadingGoods;
 
@@ -159,13 +157,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final TextEditingController _ecerInputController = TextEditingController(
     text: '0',
   );
-  final TextEditingController _highValueInputController =
-      TextEditingController(text: '0');
+  final TextEditingController _highValueInputController = TextEditingController(
+    text: '0',
+  );
 
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
   int _currentActualEcer = 0;
   int _currentActualHighValue = 0;
+
+  File? _pickedManifestPhoto;
+
+  Future<void> _pickManifestPhoto() async {
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1280,
+        maxHeight: 1280,
+        imageQuality: 70,
+      );
+      if (pickedFile != null) {
+        setState(() {
+          _pickedManifestPhoto = File(pickedFile.path);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal membuka kamera: $e')),
+        );
+      }
+    }
+  }
 
   Timer? _stopwatchTimer;
   Timer? _watchdogTimer;
@@ -329,18 +353,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
 
       if (data != null && data['has_active_ritase'] == true) {
-        
-        // Ada ritase baru → izinkan completed state normal kembali
-        _suppressCompletedState = false;
-        _scheduleBlocked = false;
         final fetchedKendaraanId = (data['id_kendaraan'] as num?)?.toInt() ?? 0;
         if (fetchedKendaraanId > 0) {
           _idKendaraan = fetchedKendaraanId;
         }
-        if (data['plat_nomor'] != null && data['plat_nomor'].toString().isNotEmpty) {
+        if (data['plat_nomor'] != null &&
+            data['plat_nomor'].toString().isNotEmpty) {
           _selectedVehiclePlat = data['plat_nomor'].toString();
         }
-        if (data['jenis_kendaraan'] != null && data['jenis_kendaraan'].toString().isNotEmpty) {
+        if (data['jenis_kendaraan'] != null &&
+            data['jenis_kendaraan'].toString().isNotEmpty) {
           _selectedVehicleType = data['jenis_kendaraan'].toString();
         }
         final rawStops = data['stops'];
@@ -374,7 +396,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
         bool routeChanged = false;
-        if (isSilentCheck && _hasLoadedBackendSellers && _allSellers.isNotEmpty) {
+        if (isSilentCheck &&
+            _hasLoadedBackendSellers &&
+            _allSellers.isNotEmpty) {
           if (_allSellers.length != parsedSellers.length) {
             routeChanged = true;
           } else {
@@ -430,7 +454,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ? DateTime.now().difference(_stageStartedAt!).inSeconds
                 : 0;
             if (!_userReturnedToHome) {
-              _isTripStarted = lastStatus.isNotEmpty && !lastStatus.toLowerCase().contains('selesai');
+              _isTripStarted =
+                  lastStatus.isNotEmpty &&
+                  !lastStatus.toLowerCase().contains('selesai');
             } else {
               _isTripStarted = false;
             }
@@ -453,16 +479,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           idRitase: _idRitase,
         );
       } else if (data != null && data['all_completed'] == true) {
-        // Jika user baru saja tekan "Kembali ke Beranda" dari layar selesai,
-        // jangan tampilkan layar completed lagi sampai flag di-reset.
-        if (_suppressCompletedState) return;
         setState(() {
           _idRitase = 0;
-          _isTripStarted = false; // langsung ke beranda
+          _allSellers.clear();
+          _currentSeller = null;
+          _isTripStarted = false;
           _isEntireRouteCompleted = true;
           _scheduleBlocked = false;
         });
-      } else {
+      } else if (data != null) {
+        // Server merespons sukses (HTTP 200), tetapi memang tidak ada ritase aktif
         bool wasActiveTrip = _isTripStarted && !_isEntireRouteCompleted;
         final bool blocked = data != null && data['schedule_blocked'] == true;
         String? nextJamMulai;
@@ -477,6 +503,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         setState(() {
           _idRitase = 0;
           _allSellers.clear();
+          _currentSeller = null;
           _isTripStarted = false;
           _scheduleBlocked = blocked;
           _nextScheduleJamMulai = nextJamMulai;
@@ -504,10 +531,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Map status event server → stage mobile (buat resume setelah app di-kill).
   TripStage _mapStatusToStage(String status) {
     final s = status.toLowerCase().trim();
-    if (s.contains('menuju') || s.contains('berangkat') || s.contains('keluar')) return TripStage.enRoute;
+    if (s.contains('menuju') || s.contains('berangkat') || s.contains('keluar'))
+      return TripStage.enRoute;
     if (s.contains('tiba') || s.contains('sampai')) return TripStage.arrived;
     if (s.contains('selesai')) return TripStage.completed;
-    if (s.contains('muat') || s.contains('loading') || s.contains('bongkar')) return TripStage.loadingGoods;
+    if (s.contains('muat') || s.contains('loading') || s.contains('bongkar'))
+      return TripStage.loadingGoods;
     return TripStage.loadingGoods;
   }
 
@@ -753,8 +782,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _resetSimulation() {
     _stopTimer();
-    // Tahan layar completed sampai ada ritase aktif baru dari server
-    _suppressCompletedState = true;
     setState(() {
       _isTripStarted = false;
       _isEntireRouteCompleted = false;
@@ -869,7 +896,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _completedStops.length + 1 < _allSellers.length) {
       destName = _allSellers[_completedStops.length + 1].name;
     }
-    final currentLocName = _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
+    final currentLocName =
+        _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
         ? _allSellers[_completedStops.length].name
         : (_currentSeller?.name ?? currLoc);
 
@@ -1189,21 +1217,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _nextStage() {
-    if (_currentStage == TripStage.loadingGoods) {
-      final inputKoli = int.tryParse(_koliInputController.text.trim()) ?? 0;
-      final inputEcer = int.tryParse(_ecerInputController.text.trim()) ?? 0;
-      final inputHighValue =
-          int.tryParse(_highValueInputController.text.trim()) ?? 0;
-      _currentActualKoli += inputKoli;
-      _currentActualEcer += inputEcer;
-      _currentActualHighValue += inputHighValue;
-    }
-
+  Future<void> _nextStage() async {
+    int lastInputKoli = 0;
+    int lastInputEcer = 0;
+    int lastInputHighValue = 0;
     final finishedStage = _currentStage;
     final finishedDuration =
         _currentStageDurations[finishedStage] ?? _activeStageSeconds;
 
+    // 1. Jika baru saja menyelesaikan proses bongkar muat (loadingGoods)
+    if (_currentStage == TripStage.loadingGoods) {
+      lastInputKoli = int.tryParse(_koliInputController.text.trim()) ?? 0;
+      lastInputEcer = int.tryParse(_ecerInputController.text.trim()) ?? 0;
+      lastInputHighValue =
+          int.tryParse(_highValueInputController.text.trim()) ?? 0;
+      _currentActualKoli += lastInputKoli;
+      _currentActualEcer += lastInputEcer;
+      _currentActualHighValue += lastInputHighValue;
+
+      // Upload foto (jika ada) terlebih dahulu agar URL-nya langsung lengkap
+      String? photoUrl;
+      final photoToUpload = _pickedManifestPhoto;
+      final photoLocationName = _currentSeller?.name;
+      final photoStopId = int.tryParse(_currentSeller?.id ?? '0') ?? 0;
+      if (photoToUpload != null && _idRitase > 0) {
+        photoUrl = await ApiClient.uploadManifestPhoto(
+          idRitase: _idRitase,
+          filePath: photoToUpload.path,
+          namaLokasi: photoLocationName,
+          idStop: photoStopId,
+        );
+      }
+      _pickedManifestPhoto = null;
+
+      // Kirim event "Bongkar Muat Barang" untuk lokasi ini beserta koli/ecer/hv & foto
+      if (_idRitase > 0) {
+        ApiClient.sendStatusUpdate(
+          idRitase: _idRitase,
+          status: "mulai_loading",
+          latitude: _latitude,
+          longitude: _longitude,
+          koli: lastInputKoli,
+          ecer: lastInputEcer,
+          highValue: lastInputHighValue,
+          namaLokasi: _currentSeller?.name,
+          fotoManifestUrl: photoUrl,
+        );
+      }
+    }
+
+    // 2. Transisi stage di dalam aplikasi
     setState(() {
       _currentStageDurations[_currentStage] = _activeStageSeconds;
       _activeStageSeconds = 0;
@@ -1212,7 +1275,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case TripStage.loadingGoods:
           final isLastStop = _completedStops.length + 1 >= _allSellers.length;
           if (isLastStop) {
-            // Selesai bongkar muat di stop terakhir (Gateway)
             if (_currentSeller != null) {
               final stopTotalDuration = _currentStageDurations.values.fold(
                 0,
@@ -1233,18 +1295,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _currentStage = TripStage.completed;
             _isEntireRouteCompleted = true;
           } else {
-            // Selesai muat barang di stop saat ini -> berangkat menuju stop berikutnya
             _currentStage = TripStage.enRoute;
           }
           break;
 
         case TripStage.enRoute:
-          // Dalam perjalanan -> tiba di lokasi tujuan
           _currentStage = TripStage.arrived;
           break;
 
         case TripStage.arrived:
-          // Tiba di lokasi -> mulai proses bongkar muat di lokasi tersebut
           if (_currentSeller != null) {
             final stopTotalDuration = _currentStageDurations.values.fold(
               0,
@@ -1285,11 +1344,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           break;
       }
 
-      // Stage baru dimulai SEKARANG — baseline waktu nyata (tahan layar mati).
-      // Backend juga hitung durasi dari selisih created_at, jadi konsisten.
       _stageStartedAt = DateTime.now();
     });
 
+    // 3. Kirim status transisi perjalanan baru (Sedang Menuju / Tiba) dengan koli: 0
     String? locationName = _currentSeller?.name ?? 'Selesai';
     if (_currentStage == TripStage.enRoute) {
       final nextIdx = _completedStops.length + 1;
@@ -1303,13 +1361,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       status: _stageToStatusKey(_currentStage),
       latitude: _latitude,
       longitude: _longitude,
-      koli: _currentActualKoli,
-      ecer: _currentActualEcer,
-      highValue: _currentActualHighValue,
-      durasiDetik:
-          0, // durasi dihitung dari selisih created_at antar event di web
+      koli: 0,
+      ecer: 0,
+      highValue: 0,
+      durasiDetik: 0,
       namaLokasi: locationName,
     );
+
+    if (_isEntireRouteCompleted && _idRitase > 0) {
+      ApiClient.finishRitase(_idRitase);
+    }
 
     _sendInstantTracking(durasiDetik: finishedDuration);
   }
@@ -1502,7 +1563,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.white.withValues(alpha: 0.85),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.85,
+                                      ),
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -1793,7 +1856,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onPressed: _finishCurrentRitaseAndNext,
               icon: const Icon(Icons.arrow_forward_rounded, size: 20),
               label: const Text(
-                'Selesaikan & Lanjut Ritase',
+                'Selesaikan & Kembali ke Beranda',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
@@ -1813,14 +1876,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _finishCurrentRitaseAndNext() async {
     _stopTimer();
-    final success = await ApiClient.finishRitase(_idRitase);
-    if (!success) {
-      _showSnack('Gagal menyelesaikan ritase di server');
-      return;
+    if (_idRitase > 0) {
+      await ApiClient.finishRitase(_idRitase);
     }
 
     setState(() {
       _isTripStarted = false;
+      _isEntireRouteCompleted = false;
       _completedStops.clear();
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
@@ -2083,10 +2145,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
   // ── CTA button ──
   Widget _buildStartButton() {
-    final bool hasActiveTrip = _idRitase > 0 &&
-        _currentStage != TripStage.completed;
-    final String buttonText =
-        hasActiveTrip ? 'Lanjutkan Perjalanan' : 'Mulai Perjalanan';
+    final bool hasActiveTrip =
+        _idRitase > 0 && _currentStage != TripStage.completed;
+    final String buttonText = hasActiveTrip
+        ? 'Lanjutkan Perjalanan'
+        : 'Mulai Perjalanan';
 
     return SizedBox(
       width: double.infinity,
@@ -2657,6 +2720,120 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             icon: Icons.workspace_premium_outlined,
             color: const Color(0xFF8E24AA),
           ),
+          const SizedBox(height: 12),
+          // 📷 Foto Bukti Manifest
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: _pickedManifestPhoto != null
+                    ? AppColors.success.withOpacity(0.5)
+                    : AppColors.borderLight,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.camera_alt_rounded,
+                      size: 18,
+                      color: _pickedManifestPhoto != null
+                          ? AppColors.success
+                          : AppColors.textSecondary,
+                    ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Foto Bukti Manifest / Muatan',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    if (_pickedManifestPhoto != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.success.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Terlampir',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.success,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (_pickedManifestPhoto != null)
+                  Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(
+                          _pickedManifestPhoto!,
+                          height: 130,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: InkWell(
+                          onTap: _pickManifestPhoto,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: const [
+                                Icon(Icons.refresh, size: 12, color: Colors.white),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Foto Ulang',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 10),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  OutlinedButton.icon(
+                    onPressed: _pickManifestPhoto,
+                    icon: const Icon(Icons.photo_camera_outlined, size: 16),
+                    label: const Text('Ambil Foto Kamera',
+                        style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.navy,
+                      minimumSize: const Size(double.infinity, 38),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -2870,10 +3047,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _getNextStageButtonLabel() {
     final isLastStop = _completedStops.length + 1 >= _allSellers.length;
     String? nextDestName;
-    if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+    if (_allSellers.isNotEmpty &&
+        _completedStops.length + 1 < _allSellers.length) {
       nextDestName = _allSellers[_completedStops.length + 1].name;
     }
-    final currentOriginName = _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
+    final currentOriginName =
+        _allSellers.isNotEmpty && _completedStops.length < _allSellers.length
         ? _allSellers[_completedStops.length].name
         : (_currentSeller?.name ?? 'Lokasi');
 
@@ -2935,7 +3114,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             OutlinedButton.icon(
               onPressed: _resetSimulation,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Siap Perjalanan Baru'),
+              label: const Text('Muat Ulang'),
               style: OutlinedButton.styleFrom(
                 minimumSize: const Size(double.infinity, 44),
                 shape: RoundedRectangleBorder(
