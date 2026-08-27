@@ -63,6 +63,27 @@ double? _prevBgLat;
 double? _prevBgLng;
 DateTime? _prevBgTime;
 
+/// Ambil lokasi background dengan timeLimit 10s. Jika hardware GPS dibekukan XOS/Doze
+/// sehingga getCurrentPosition hang/timeout, fallback ke getLastKnownPosition.
+Future<Position?> _getBgLocation() async {
+  try {
+    return await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.medium,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+  } catch (e) {
+    print('[BG TRACKING] getCurrentPosition timeout/fail: $e. Fallback ke lastKnownPosition.');
+    try {
+      return await Geolocator.getLastKnownPosition();
+    } catch (e2) {
+      print('[BG TRACKING] getLastKnownPosition gagal: $e2');
+      return null;
+    }
+  }
+}
+
 Future<void> _sendHeartbeat() async {
   try {
     final cfg = await ApiClient.loadDriverConfig();
@@ -73,7 +94,12 @@ Future<void> _sendHeartbeat() async {
     final token = await ApiClient.getToken();
     if (token == null || token.isEmpty) return; // belum login → jangan kirim
 
-    final pos = await Geolocator.getCurrentPosition();
+    final pos = await _getBgLocation();
+    if (pos == null) {
+      print('[BG TRACKING] skip heartbeat: gagal dapatkan posisi');
+      return;
+    }
+
     final idRitase = cfg['id_ritase'] as int? ?? 0;
 
     // Speed: pakai speed hardware kalau valid (>0), fallback hitung dari
@@ -163,6 +189,7 @@ class _BgTaskHandler extends TaskHandler {
   }
 }
 
+@pragma('vm:entry-point')
 void _startCallback() {
   FlutterForegroundTask.setTaskHandler(_BgTaskHandler());
 }
@@ -200,6 +227,8 @@ Future<void> startBackgroundTracking() async {
         channelId: 'tower_control_tracking',
         channelName: 'Tracking Armada',
         channelDescription: 'Notifikasi saat posisi armada sedang di-track',
+        channelImportance: NotificationChannelImportance.HIGH,
+        priority: NotificationPriority.HIGH,
       ),
       iosNotificationOptions: IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
@@ -298,24 +327,32 @@ Future<void> _scheduleWatchdogAlarm() async {
     await AndroidAlarmManager.initialize();
     await AndroidAlarmManager.cancel(_kWatchdogAlarmId);
 
-    // Coba exact dulu (Android 12+ butuh SCHEDULE_EXACT_ALARM — manifest
-    // sudah deklarasi). Kalau diizinkan, pakai exact+allowWhileIdle biar
-    // bandel di Doze & ROM agresif. Kalau ditolak (exception), fallback ke
-    // alarm biasa (best-effort).
-    var scheduled = false;
+    // Cek izin SCHEDULE_EXACT_ALARM (Android 12+ / Android 14+).
+    bool canScheduleExact = true;
     try {
-      scheduled = await AndroidAlarmManager.oneShot(
-        const Duration(minutes: 5),
-        _kWatchdogAlarmId,
-        alarmWatchdogCallback,
-        exact: true,
-        wakeup: true,
-        allowWhileIdle: true,
-        rescheduleOnReboot: true,
-      );
-    } catch (e) {
-      print('[BG TRACK] exact alarm ditolak, fallback biasa: $e');
+      if (await Permission.scheduleExactAlarm.isDenied) {
+        canScheduleExact = false;
+        print('[BG TRACK] SCHEDULE_EXACT_ALARM isDenied di OS');
+      }
+    } catch (_) {}
+
+    var scheduled = false;
+    if (canScheduleExact) {
+      try {
+        scheduled = await AndroidAlarmManager.oneShot(
+          const Duration(minutes: 5),
+          _kWatchdogAlarmId,
+          alarmWatchdogCallback,
+          exact: true,
+          wakeup: true,
+          allowWhileIdle: true,
+          rescheduleOnReboot: true,
+        );
+      } catch (e) {
+        print('[BG TRACK] exact alarm ditolak, fallback biasa: $e');
+      }
     }
+
     if (!scheduled) {
       await AndroidAlarmManager.oneShot(
         const Duration(minutes: 5),
