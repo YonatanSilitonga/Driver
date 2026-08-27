@@ -4,7 +4,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/background_tracking.dart';
-import '../services/oem_intent_service.dart';
 import '../widgets/app_colors.dart';
 import '../widgets/app_dialog.dart';
 
@@ -41,46 +40,13 @@ class _PermissionGuideScreenState extends State<PermissionGuideScreen> {
   bool _batteryUnrestricted = false;
   bool _notificationGranted = false;
   bool _autostartDone = false;
-  String _brandName = '';
 
   static const _kAutostartPref = 'permission_guide_autostart_done';
 
   @override
   void initState() {
     super.initState();
-    _initSequentialFlow();
-  }
-
-  /// Memicu pop-up izin sistem beruntun secara otomatis (Notifikasi -> Lokasi -> Baterai)
-  Future<void> _initSequentialFlow() async {
-    setState(() => _checking = true);
-    _brandName = await OemIntentService.getBrandName();
-
-    try {
-      // 1. Pop-up sistem Notifikasi
-      final notif = await Permission.notification.status;
-      if (!notif.isGranted) {
-        await Permission.notification.request();
-      }
-    } catch (_) {}
-
-    try {
-      // 2. Pop-up sistem Lokasi
-      var loc = await Geolocator.checkPermission();
-      if (loc == LocationPermission.denied) {
-        loc = await Geolocator.requestPermission();
-      }
-    } catch (_) {}
-
-    try {
-      // 3. Pop-up sistem Baterai
-      final batt = await Permission.ignoreBatteryOptimizations.status;
-      if (!batt.isGranted) {
-        await Permission.ignoreBatteryOptimizations.request();
-      }
-    } catch (_) {}
-
-    await _checkAll();
+    _checkAll();
   }
 
   Future<void> _checkAll() async {
@@ -245,10 +211,10 @@ class _PermissionGuideScreenState extends State<PermissionGuideScreen> {
                           children: [
                             Text(
                               allReady
-                                  ? 'Semua izin sudah pas! (${_brandName.isNotEmpty ? _brandName : "Android"})'
-                                  : '$_readyCount dari 4 izin selesai (${_brandName.isNotEmpty ? _brandName : "Android"})',
+                                  ? 'Semua izin sudah pas!'
+                                  : '$_readyCount dari 4 izin selesai',
                               style: const TextStyle(
-                                fontSize: 15,
+                                fontSize: 16,
                                 fontWeight: FontWeight.w700,
                                 color: AppColors.textPrimary,
                               ),
@@ -601,28 +567,11 @@ class _ManufacturerGuideDialogState extends State<_ManufacturerGuideDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            FilledButton.icon(
-              onPressed: () async {
-                await OemIntentService.launchOemAutoStartSettings();
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.navy,
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(42),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              icon: const Icon(Icons.rocket_launch_rounded, size: 18),
-              label: const Text(
-                'Buka Auto-Start Manager HP',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 12),
             const Text(
-              'Klik tombol di atas untuk langsung membuka halaman pengelola Auto-Start HP kamu. Atau pilih merk HP di bawah untuk panduan manual.',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+              'Pilih merk HP kamu, ikuti langkahnya. Ini biar sistem tidak '
+              'membunuh service tracking saat layar mati. Tips: setelah selesai, '
+              'kunci app dari Recent apps (ikon gembok) biar gak ke-clean.',
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
             const SizedBox(height: 12),
             Flexible(
