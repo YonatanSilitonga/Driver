@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
+import '../utils/network_exception.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 import 'permission_guide_screen.dart';
@@ -90,22 +91,35 @@ class _SplashScreenState extends State<SplashScreen>
     try {
       final hasToken = await ApiClient.isLoggedIn();
       if (hasToken) {
-        final user = await AuthService.me();
-        if (user != null) {
+        try {
+          final user = await AuthService.me();
+          if (user != null) {
+            destination = const HomeScreen();
+            try {
+              await startBackgroundTracking();
+            } catch (_) {}
+          } else {
+            // Token invalid/expired dari server → bersihkan sesi
+            await ApiClient.clearToken();
+          }
+        } on NetworkException catch (netErr) {
+          if (netErr.type == NetworkErrorType.unauthorized) {
+            // Sesi memang sudah invalid dari server (401/403)
+            await ApiClient.clearToken();
+          } else {
+            // Offline atau timeout saat validasi -> Tetap masuk ke HomeScreen (Offline-First)
+            destination = const HomeScreen();
+            try {
+              await startBackgroundTracking();
+            } catch (_) {}
+          }
+        } catch (_) {
+          // Error jaringan umum -> Masuk ke HomeScreen (Offline-First)
           destination = const HomeScreen();
-          // Restart tracking kalau app pernah ditutup lewat "Keluar Aplikasi"
-          // (service di-stop saat keluar). No-op kalau service masih jalan.
-          try {
-            await startBackgroundTracking();
-          } catch (_) {}
-        } else {
-          // Token invalid/expired → bersihkan sesi & minta login ulang.
-          await ApiClient.clearToken();
         }
       }
     } catch (_) {
-      // Jaringan bermasalah saat validasi — aman ke halaman login dulu.
-      await ApiClient.clearToken();
+      destination = const LoginScreen();
     }
 
     if (!mounted) return;

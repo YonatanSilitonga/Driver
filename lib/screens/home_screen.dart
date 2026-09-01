@@ -1,18 +1,21 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
+import '../services/app_updater.dart';
+import 'history_screen.dart';
 import 'login_screen.dart';
 import 'permission_guide_screen.dart';
 import '../widgets/app_colors.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/vehicle_card.dart';
 import '../widgets/origin_card.dart';
+import '../widgets/no_internet_banner.dart';
+import '../utils/network_exception.dart';
 
 // ── Models (unchanged) ──
 
@@ -115,6 +118,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<SellerDummy> _allSellers = [];
+  String? _lastFetchError;
+  int _historyRefreshTrigger = 0;
 
   String _getJenisLokasi(String? jenisStop) {
     if (jenisStop == 'gudang') return 'Gudang';
@@ -238,12 +243,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<AnimationController?> _cardControllers = [];
 
   // ── Guard izin lokasi ──
-  // `_checkingPermission`: cegah panggilan bertumpuk (initState + resume
-  // + requestPermission yang memicu lifecycle) → dialog lokasi numpuk.
-  // `_alwaysPromptedThisSession`: dialog "Live tracking saat layar mati"
-  // cuma muncul SEKALI per sesi app, bukan tiap balik dari background.
   bool _checkingPermission = false;
   bool _alwaysPromptedThisSession = false;
+  int _currentTabIndex = 0; // 0: Beranda, 1: Riwayat
 
   @override
   void initState() {
@@ -254,6 +256,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ApiClient.markAppOpen();
     _startWatchdog();
     _startRoutePollingTimer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppUpdater.checkUpdate(context);
+    });
   }
 
   /// Watchdog tiap 30 detik: kalau service background mati (di-kill OS),
@@ -349,6 +354,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     try {
+      _lastFetchError = null;
       final data = await ApiClient.fetchActiveRitase(_idDriver, _idKendaraan);
       if (!mounted) return;
 
@@ -388,13 +394,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final stageStartedAt = DateTime.tryParse(
           data['stage_started_at']?.toString() ?? '',
         );
-        // Progress resume dari server: index stop yang sedang dikerjakan +
-        // status stage terakhir (biar app yang di-kill & dibuka lagi LANJUT,
-        // bukan mulai ulang dari stop pertama).
         final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
         final lastStatus = data['last_status']?.toString() ?? '';
 
-        // Cek apakah ada perubahan rute dibanding yang ditampilkan sekarang
         bool routeChanged = false;
         if (isSilentCheck &&
             _hasLoadedBackendSellers &&
@@ -414,8 +416,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         _hasLoadedBackendSellers = true;
 
-        // Anti-manipulasi: kalau trip SUDAH mulai di sesi ini, pertahankan
-        // state aktifnya (jangan reset walau ini hasil refresh).
         if (_isTripStarted && _currentSeller != null) {
           setState(() {
             _idRitase = data['id_ritase'] ?? 0;
@@ -434,8 +434,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return;
         }
 
-        // Belum mulai → simpan sebagai "jadwal aktif" yang menunggu keputusan
-        // user. Tombol Mulai/Lanjutkan muncul, bukan auto-start trip.
         setState(() {
           _idRitase = data['id_ritase'] ?? 0;
           _allSellers = parsedSellers;
@@ -488,9 +486,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _scheduleBlocked = false;
         });
       } else if (data != null) {
-        // Server merespons sukses (HTTP 200), tetapi memang tidak ada ritase aktif
         bool wasActiveTrip = _isTripStarted && !_isEntireRouteCompleted;
-        final bool blocked = data != null && data['schedule_blocked'] == true;
+        final bool blocked = data['schedule_blocked'] == true;
         String? nextJamMulai;
         String? nextJamSelesai;
         String? nextJenisRitase;
@@ -510,7 +507,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _nextScheduleJamSelesai = nextJamSelesai;
           _nextScheduleJenisRitase = nextJenisRitase;
           if (!wasActiveTrip && _isEntireRouteCompleted) {
-            // Pertahankan _isEntireRouteCompleted jika rute memang selesai normal
           } else {
             _isEntireRouteCompleted = false;
           }
@@ -518,6 +514,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (isSilentCheck && wasActiveTrip && mounted) {
           _showRouteDeletedNotification();
         }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final netEx = NetworkException.from(e);
+      _lastFetchError = netEx.message;
+      if (!isSilentCheck) {
+        _showSnack(
+          netEx.message,
+          isError: true,
+          icon: netEx.isNoInternet ? Icons.wifi_off_rounded : Icons.cloud_off_rounded,
+        );
       }
     } finally {
       if (mounted) {
@@ -671,13 +678,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  void _showSnack(String message) {
+  void _showSnack(String message, {bool isError = false, IconData? icon}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(fontSize: 13, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isError ? AppColors.error : AppColors.navy,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+        duration: Duration(seconds: isError ? 4 : 2),
       ),
     );
   }
@@ -1395,13 +1418,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       icon: Icons.logout_rounded,
       iconColor: AppColors.navy,
       title: 'Keluar Aplikasi',
-      message: 'Yakin mau keluar dari aplikasi?',
+      message: 'Yakin mau keluar? Anda akan diarahkan ke halaman login.',
       actionLabel: 'Keluar',
       destructive: true,
     ).then((confirmed) async {
       if (confirmed != true || !mounted) return;
-      // Keluar beneran: matiin tracking + kasih tau backend biar
-      // armada langsung Offline di dashboard (gak nunggu ambang 3 mnt).
+      // Hentikan tracking & kirim sinyal offline ke backend
       try {
         await sendOfflineSignal();
       } catch (_) {}
@@ -1409,7 +1431,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         await stopBackgroundTracking();
       } catch (_) {}
       if (!mounted) return;
-      SystemNavigator.pop();
+      // Logout & arahkan ke halaman Login (bukan keluar aplikasi)
+      await ApiClient.clearToken();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
     });
   }
 
@@ -1423,6 +1451,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
+        // Jika sedang di tab riwayat, tekan back kembali ke tab Beranda
+        if (_currentTabIndex != 0) {
+          setState(() => _currentTabIndex = 0);
+          return;
+        }
         // Anti-manipulasi: selama trip aktif, back DIBLOKIR — driver wajib
         // selesaikan rute dulu (gak bisa kabur dari tracking seenaknya).
         if (_isTripStarted && !_isEntireRouteCompleted) {
@@ -1433,19 +1466,74 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
       child: Scaffold(
         backgroundColor: AppColors.scaffoldBg,
-        body: RefreshIndicator(
-          onRefresh: () async {
-            await _fetchActiveRitase();
-          },
-          color: AppColors.navy,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              // ── Header ──
-              _buildHeader(),
-              // ── Body ──
-              SliverToBoxAdapter(
-                child: _isTripStarted ? _buildTripBody() : _buildHomeBody(),
+        body: NoInternetBanner(
+          child: IndexedStack(
+            index: _currentTabIndex,
+            children: [
+              // ── TAB 0: BERANDA ──
+              RefreshIndicator(
+                onRefresh: () async {
+                  await _fetchActiveRitase();
+                },
+                color: AppColors.navy,
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    // ── Header ──
+                    _buildHeader(),
+                    // ── Body ──
+                    SliverToBoxAdapter(
+                      child: _isTripStarted ? _buildTripBody() : _buildHomeBody(),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── TAB 1: RIWAYAT ──
+              HistoryScreen(
+                idDriver: _idDriver,
+                isEmbedded: true,
+                refreshTrigger: _historyRefreshTrigger,
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, -3),
+              ),
+            ],
+          ),
+          child: NavigationBar(
+            selectedIndex: _currentTabIndex,
+            onDestinationSelected: (index) {
+              if (index == 1) {
+                setState(() {
+                  _historyRefreshTrigger++;
+                  _currentTabIndex = index;
+                });
+              } else {
+                setState(() => _currentTabIndex = index);
+              }
+            },
+            backgroundColor: Colors.white,
+            indicatorColor: const Color(0xFFEFF6FF),
+            elevation: 0,
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined, color: Color(0xFF64748B)),
+                selectedIcon: Icon(Icons.home_rounded, color: Color(0xFF0D47A1)),
+                label: 'Beranda',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.history_outlined, color: Color(0xFF64748B)),
+                selectedIcon: Icon(Icons.history_rounded, color: Color(0xFF0D47A1)),
+                label: 'Riwayat',
               ),
             ],
           ),
@@ -1527,62 +1615,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         const SizedBox(height: 3),
-                        if (_selectedVehiclePlat != null &&
-                            _selectedVehiclePlat!.isNotEmpty)
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.22),
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: 0.35),
-                                    width: 0.8,
-                                  ),
-                                ),
-                                child: Text(
-                                  _selectedVehiclePlat!,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                              ),
-                              if (_selectedVehicleType != null &&
-                                  _selectedVehicleType!.isNotEmpty) ...[
-                                const SizedBox(width: 6),
-                                Flexible(
-                                  child: Text(
-                                    _selectedVehicleType!,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: Colors.white.withValues(
-                                        alpha: 0.85,
-                                      ),
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          )
-                        else
-                          Text(
-                            _isTripStarted
-                                ? _currentStageTitle
-                                : 'Siap bertugas hari ini?',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.white.withValues(alpha: 0.7),
-                            ),
+                        Text(
+                          _isTripStarted
+                              ? _currentStageTitle
+                              : 'Siap bertugas hari ini?',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.white.withValues(alpha: 0.7),
                           ),
+                        ),
                       ],
                     ),
                   ),
@@ -1613,7 +1654,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     onSelected: (value) {
-                      if (value == 'password') {
+                      if (value == 'check_update') {
+                        AppUpdater.checkUpdate(context, isManual: true);
+                      } else if (value == 'password') {
                         _showChangePasswordDialog();
                       } else if (value == 'permissions') {
                         Navigator.of(context).push(
@@ -1644,6 +1687,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ],
                           ),
                         ),
+                      const PopupMenuItem(
+                        value: 'check_update',
+                        height: 44,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.system_update_rounded,
+                              size: 18,
+                              color: AppColors.navy,
+                            ),
+                            SizedBox(width: 10),
+                            Text('Cek Pembaruan'),
+                          ],
+                        ),
+                      ),
                       const PopupMenuItem(
                         value: 'password',
                         height: 44,
@@ -1718,6 +1776,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return Padding(
         padding: const EdgeInsets.all(16),
         child: _buildLoadingRouteCard(),
+      );
+    }
+
+    // 2.5 Jika gagal memuat rute karena error jaringan → tampilkan kartu error state
+    if (_lastFetchError != null && _allSellers.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: _buildErrorState(),
       );
     }
 
@@ -1994,6 +2060,72 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               foregroundColor: AppColors.navy,
               side: const BorderSide(color: AppColors.navy, width: 1.5),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Error state when route fetching fails ──
+  Widget _buildErrorState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppColors.cardWhite,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.error.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.cloud_off_rounded,
+              size: 40,
+              color: AppColors.error,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Gagal Memuat Jadwal Rute',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _lastFetchError ?? 'Periksa koneksi internet Anda dan coba lagi.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await _fetchActiveRitase();
+            },
+            icon: const Icon(Icons.refresh_rounded, size: 18, color: Colors.white),
+            label: const Text(
+              'Coba Lagi',
+              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.navy,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),

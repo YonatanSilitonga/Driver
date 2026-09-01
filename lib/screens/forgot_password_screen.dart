@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
+import '../utils/network_exception.dart';
 import '../widgets/app_colors.dart';
 
 /// Halaman "Lupa Password" (tanpa OTP) — verifikasi username + no_hp driver.
@@ -27,12 +28,27 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     super.dispose();
   }
 
-  void _snack(String msg, {bool isError = true}) {
+  void _snack(String msg, {bool isError = true, IconData? icon}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(msg),
+        content: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon, color: Colors.white, size: 18),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                msg,
+                style: const TextStyle(fontSize: 13, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
         backgroundColor: isError ? AppColors.error : AppColors.navy,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
       ),
     );
   }
@@ -70,7 +86,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _snack(e.toString());
+      final netEx = NetworkException.from(e);
+      _snack(
+        netEx.message,
+        isError: true,
+        icon: netEx.isNoInternet
+            ? Icons.wifi_off_rounded
+            : (netEx.isTimeout
+                ? Icons.timer_off_outlined
+                : Icons.error_outline_rounded),
+      );
     }
   }
 

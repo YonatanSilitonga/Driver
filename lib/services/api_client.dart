@@ -2,18 +2,29 @@
 
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/network_exception.dart';
 
 class ApiClient {
-  // Default → backend ngrok kawan (office). Override via:
-  //   flutter run --dart-define=API_URL=<url>/api/v1
+  // ── [PILIHAN ENDPOINT API] ──
+  // A. Local Testing (Gunakan untuk test via localhost/emulator):
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://10.0.2.2:8081/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://10.0.2.2:8081/api/v1',
   );
+
+  // B. Production VPS (Di-comment saat testing lokal):
+  // static const String _defaultUrl = String.fromEnvironment(
+  //   'API_URL',
+  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  // );
+  // static const String _fallbackUrl = String.fromEnvironment(
+  //   'API_URL_FALLBACK',
+  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  // );
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
@@ -31,8 +42,8 @@ class ApiClient {
     final dio = Dio(
       BaseOptions(
         baseUrl: _activeBaseUrl,
-        connectTimeout: const Duration(seconds: 20),
-        receiveTimeout: const Duration(seconds: 25),
+        connectTimeout: const Duration(seconds: 12),
+        receiveTimeout: const Duration(seconds: 15),
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
@@ -53,7 +64,8 @@ class ApiClient {
           handler.next(options);
         },
         onError: (DioException e, handler) async {
-          final isNgrokOffline = e.response?.statusCode == 404 &&
+          final isNgrokOffline =
+              e.response?.statusCode == 404 &&
               (e.response?.data?.toString().contains('ngrok') ?? false);
           if ((e.type == DioExceptionType.connectionTimeout ||
                   e.type == DioExceptionType.connectionError ||
@@ -160,16 +172,14 @@ class ApiClient {
     }
   }
 
-  /// Helper POST auth — lempar pesan error dari backend biar bisa ditampilkan.
+  /// Helper POST auth — lempar NetworkException biar pesan ramah pengguna.
   static Future<void> _postAuth(String path, Map<String, dynamic> data) async {
     try {
       await dio.post(path, data: data);
     } on DioException catch (e) {
-      final body = e.response?.data;
-      final msg = (body is Map && body['message'] != null)
-          ? body['message'].toString()
-          : 'Terjadi kesalahan. Coba lagi.';
-      throw Exception(msg);
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
     }
   }
 
@@ -337,7 +347,9 @@ class ApiClient {
       });
       final res = await dio.post('/driver/upload-manifest', data: formData);
       print('✅ [UPLOAD MANIFEST] Berhasil: ${res.data}');
-      if (res.statusCode == 200 && res.data != null && res.data['data'] != null) {
+      if (res.statusCode == 200 &&
+          res.data != null &&
+          res.data['data'] != null) {
         return res.data['data']['photo_url']?.toString();
       }
       return null;
@@ -371,6 +383,83 @@ class ApiClient {
       print('❌ [RESET TEST RITASE] Gagal: $e');
       return false;
     }
+  }
+
+  /// Ambil riwayat ritase selesai milik driver
+  static Future<List<Map<String, dynamic>>> fetchDriverHistory({
+    int? idDriver,
+    String filter = 'all',
+    String? startDate,
+    String? endDate,
+  }) async {
+    try {
+      var driverId = idDriver ?? 0;
+      if (driverId == 0) {
+        final cfg = await loadDriverConfig();
+        driverId = cfg['id_driver'] ?? 0;
+      }
+      final queryParams = <String, dynamic>{
+        'id_driver': driverId,
+        'filter': filter,
+      };
+      if (startDate != null && startDate.isNotEmpty) {
+        queryParams['start_date'] = startDate;
+      }
+      if (endDate != null && endDate.isNotEmpty) {
+        queryParams['end_date'] = endDate;
+      }
+      final res = await dio.get(
+        '/driver/history-ritase',
+        queryParameters: queryParams,
+      );
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is List) {
+          return List<Map<String, dynamic>>.from(body['data']);
+        } else if (body is List) {
+          return List<Map<String, dynamic>>.from(body);
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Ambil detail stop & manifest ritase riwayat
+  static Future<Map<String, dynamic>?> fetchDriverHistoryDetail(
+    int idRitase,
+  ) async {
+    try {
+      final res = await dio.get('/driver/history-ritase/$idRitase');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+    } catch (e) {
+      print('❌ [FETCH HISTORY DETAIL] Gagal: $e');
+    }
+    return null;
+  }
+
+  /// Cek versi aplikasi terbaru dari API server (tanpa cache)
+  static Future<Map<String, dynamic>?> checkAppVersion() async {
+    try {
+      final res = await dio.get(
+        '/app/version',
+        queryParameters: {'_t': DateTime.now().millisecondsSinceEpoch},
+      );
+      if (res.statusCode == 200 && res.data != null) {
+        return Map<String, dynamic>.from(res.data);
+      }
+    } catch (e) {
+      print('❌ [API] Gagal checkAppVersion: $e');
+    }
+    return null;
   }
 
   // Ambil daftar kendaraan dari API Backend
@@ -407,10 +496,12 @@ class ApiClient {
         if (data is Map<String, dynamic>) return data;
         if (data is Map) return Map<String, dynamic>.from(data);
       }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
     } catch (e) {
-      print('❌ [API] Gagal fetchActiveRitase: $e');
+      throw NetworkException.from(e);
     }
-    return null;
   }
 
   // Ambil daftar seller dari backend
