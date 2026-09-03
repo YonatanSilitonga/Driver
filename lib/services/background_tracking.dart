@@ -24,7 +24,7 @@ final _kBaseUrl = String.fromEnvironment(
 /// Dio khusus background — pakai token dari penyimpanan (WAJIB, endpoint /driver/* JWT).
 Future<Dio> _bgDio() async {
   final dio = Dio(BaseOptions(
-    baseUrl: _kBaseUrl,
+    baseUrl: ApiClient.baseUrl,
     connectTimeout: const Duration(seconds: 20),
     receiveTimeout: const Duration(seconds: 25),
     headers: {

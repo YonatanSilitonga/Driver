@@ -1,5 +1,4 @@
 import 'package:dio/dio.dart';
-import '../utils/device_helper.dart';
 import '../utils/network_exception.dart';
 import 'api_client.dart';
 import 'background_tracking.dart';
@@ -9,13 +8,11 @@ class AuthService {
   /// Return: map user jika berhasil, null jika gagal
   static Future<Map<String, dynamic>?> login(String email, String password) async {
     try {
-      final deviceId = await DeviceHelper.getDeviceId();
       final response = await ApiClient.dio.post(
         '/auth/login',
         data: {
           'email': email,
           'password': password,
-          'device_id': deviceId,
         },
       );
 

@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/background_tracking.dart';
+import '../services/notification_service.dart';
 import '../services/app_updater.dart';
 import 'history_screen.dart';
 import 'login_screen.dart';
@@ -210,10 +211,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   double _longitude = 106.6522;
   int _currentSpeedKmH = 0;
 
-  int _idDriver = 3;
-  int _idKendaraan = 2;
-  int _idRitase = 4;
-  String _driverName = 'AWALUDIN';
+  int _idDriver = 0;
+  int _idKendaraan = 0;
+  int _idRitase = 0;
+  String _driverName = 'Driver';
   bool _hasLoadedBackendSellers = false;
   bool _userReturnedToHome = false;
   String? _scheduleWarning;
@@ -283,7 +284,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Saat app balik ke foreground: recompute durasi stage dari baseline
     // (timer Dart pause saat layar mati → _activeStageSeconds ketinggalan),
-    // plus kirim tracking biar dashboard langsung update posisi.
+    // plus kirim tracking HANYA jika trip sedang berjalan.
     if (state == AppLifecycleState.resumed) {
       ApiClient.markAppOpen();
       if (_isTripStarted && _stageStartedAt != null) {
@@ -296,7 +297,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Re-check izin & auto-start service: user mungkin baru balik dari
       // Settings setelah mengubah izin lokasi → langsung nyalakan tracking.
       _ensureLocationPermission();
-      _sendInstantTracking();
+      if (_isTripStarted && !_isEntireRouteCompleted) {
+        _sendInstantTracking();
+      }
     }
   }
 
@@ -304,10 +307,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final cfg = await ApiClient.loadDriverConfig();
     if (!mounted) return;
     setState(() {
-      _idDriver = cfg['id_driver'] ?? 3;
-      _idKendaraan = cfg['id_kendaraan'] ?? 2;
+      _idDriver = cfg['id_driver'] ?? 0;
+      _idKendaraan = cfg['id_kendaraan'] ?? 0;
       _idRitase = cfg['id_ritase'] ?? 0;
-      _driverName = cfg['driver_name']?.toString() ?? 'AWALUDIN';
+      _driverName = cfg['driver_name']?.toString() ?? 'Driver';
     });
     await _fetchVehicles();
     await _fetchActiveRitase();
@@ -476,6 +479,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           idKendaraan: _idKendaraan,
           idRitase: _idRitase,
         );
+
+        if (data['jam_mulai'] != null) {
+          NotificationService.scheduleRitaseReminders(
+            idRitase: _idRitase,
+            kodeRitase: data['kode_ritase']?.toString() ?? 'RTS',
+            ritaseKe: data['ritase_ke'] is int
+                ? data['ritase_ke']
+                : (int.tryParse(data['ritase_ke']?.toString() ?? '1') ?? 1),
+            jamMulai: data['jam_mulai'].toString(),
+            tanggal: DateTime.now().toIso8601String().split('T')[0],
+          );
+        }
       } else if (data != null && data['all_completed'] == true) {
         setState(() {
           _idRitase = 0;
@@ -496,6 +511,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           nextJamMulai = ns['jam_mulai']?.toString();
           nextJamSelesai = ns['jam_selesai']?.toString();
           nextJenisRitase = ns['jenis_ritase']?.toString();
+
+          if (nextJamMulai != null) {
+            NotificationService.scheduleRitaseReminders(
+              idRitase: ns['id_ritase'] is int ? ns['id_ritase'] : (ns['ritase_ke'] ?? 1),
+              kodeRitase: ns['kode_ritase']?.toString() ?? 'RTS',
+              ritaseKe: ns['ritase_ke'] is int ? ns['ritase_ke'] : 1,
+              jamMulai: nextJamMulai,
+              tanggal: DateTime.now().toIso8601String().split('T')[0],
+            );
+          }
         }
         setState(() {
           _idRitase = 0;
@@ -868,6 +893,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     int durasiDetik = 0,
     TripStage? stage,
   }) {
+    // Jangan kirim tracking perjalanan jika trip belum dimulai / belum pilih kendaraan
+    if (!_isTripStarted || _isEntireRouteCompleted || _idKendaraan <= 0) {
+      return;
+    }
+
     final now = DateTime.now();
     _lastSentLat = _latitude;
     _lastSentLng = _longitude;
@@ -2182,7 +2212,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 6),
           Text(
-            'Rute perjalanan akan aktif pada jam yang telah ditentukan.',
+            'Rute perjalanan dapat diakses mulai 1 jam sebelum jadwal resmi.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12.5,

@@ -115,21 +115,10 @@ class _LoginScreenState extends State<LoginScreen> {
               user['id_driver'],
               fallback: cfg['id_driver'] ?? 0,
             );
-            var idKendaraan = cfg['id_kendaraan'] ?? 2;
-            try {
-              final res = await ApiClient.dio.get('/armada/ritase');
-              final body = res.data;
-              final data = (body is Map && body['data'] is List)
-                  ? body['data'] as List
-                  : const <dynamic>[];
-              if (data.isNotEmpty && data.first is Map) {
-                final first = data.first as Map;
-                final kid = _toInt(first['id_kendaraan']);
-                if (kid > 0) idKendaraan = kid;
-              }
-            } catch (_) {
-              /* fallback ke config */
-            }
+            final idKendaraan = _toInt(
+              user['id_kendaraan'],
+              fallback: cfg['id_kendaraan'] ?? 0,
+            );
             final driverName =
                 (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
                     .toString();

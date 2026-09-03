@@ -5,15 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
-  // ── [PILIHAN ENDPOINT API] ──
-  // A. Local Testing (Gunakan untuk test via localhost/emulator):
+  // A. Production VPS:
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'http://10.0.2.2:8081/api/v1',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'http://10.0.2.2:8081/api/v1',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
   );
 
   // B. Production VPS (Di-comment saat testing lokal):
