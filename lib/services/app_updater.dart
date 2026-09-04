@@ -7,7 +7,7 @@ class AppUpdater {
 
   /// Versi aplikasi saat ini.
   /// WAJIB diubah setiap kali rilis versi baru (sama dengan VersionName di handlers.go).
-  static const String currentAppVersion = "1.0.9";
+  static const String currentAppVersion = "1.1.0";
 
   /// Cek versi aplikasi ke server & tampilkan dialog jika versi server beda.
   static Future<void> checkUpdate(BuildContext context, {bool isManual = false}) async {

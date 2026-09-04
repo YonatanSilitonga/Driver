@@ -216,7 +216,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _idRitase = 0;
   String _driverName = 'Driver';
   bool _hasLoadedBackendSellers = false;
-  bool _userReturnedToHome = false;
   String? _scheduleWarning;
   bool _canStart = true;
   bool _scheduleBlocked = false;
@@ -454,13 +453,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _activeStageSeconds = _stageStartedAt != null
                 ? DateTime.now().difference(_stageStartedAt!).inSeconds
                 : 0;
-            if (!_userReturnedToHome) {
-              _isTripStarted =
-                  lastStatus.isNotEmpty &&
-                  !lastStatus.toLowerCase().contains('selesai');
-            } else {
-              _isTripStarted = false;
-            }
+            _isTripStarted =
+                lastStatus.isNotEmpty &&
+                !lastStatus.toLowerCase().contains('selesai');
             _isEntireRouteCompleted = false;
             _currentStageDurations.clear();
             _completedStops.clear();
@@ -1193,38 +1188,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _confirmCancelTrip() async {
-    // Jika perjalanan sudah selesai seluruhnya → langsung kembali ke beranda
-    // tanpa dialog konfirmasi, dan JANGAN reset state (biar kartu selesai
-    // tetap tampil di beranda).
-    if (_isEntireRouteCompleted) {
-      _stopwatchTimer?.cancel();
-      setState(() {
-        _isTripStarted = false;
-      });
-      return;
-    }
-
-    final confirm = await AppDialog.confirm(
-      context: context,
-      icon: Icons.home_work_outlined,
-      iconColor: AppColors.orange,
-      title: 'Kembali ke Halaman Persiapan?',
-      message:
-          'Apakah Anda yakin ingin membatalkan mode perjalanan dan kembali ke Beranda Persiapan Driver?',
-      actionLabel: 'Ya, Kembali ke Beranda',
-      cancelLabel: 'Batal',
-    );
-
-    if (confirm == true && mounted) {
-      _stopwatchTimer?.cancel();
-      setState(() {
-        _userReturnedToHome = true;
-        _isTripStarted = false;
-      });
-      _showSnack('Kembali ke Halaman Beranda (Persiapan Driver).');
-    }
-  }
 
   Future<void> _confirmLogout() async {
     final confirm = await AppDialog.confirm(
@@ -1551,7 +1514,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ],
           ),
         ),
-        bottomNavigationBar: Container(
+        bottomNavigationBar: _isTripStarted
+            ? null
+            : Container(
           decoration: BoxDecoration(
             color: Colors.white,
             boxShadow: [
@@ -1623,36 +1588,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               child: Row(
                 children: [
-                  if (_isTripStarted)
-                    IconButton(
-                      onPressed: _confirmCancelTrip,
-                      icon: const Icon(
-                        Icons.arrow_back_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-                      tooltip: 'Kembali ke Beranda Persiapan',
-                    )
-                  else
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Image.asset(
-                        'assets/images/logo_mustgo.png',
-                        width: 36,
-                        height: 36,
-                        errorBuilder: (context, error, stack) {
-                          return const Icon(
-                            Icons.local_shipping_rounded,
-                            size: 32,
-                            color: Colors.white,
-                          );
-                        },
-                      ),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                    child: Image.asset(
+                      'assets/images/logo_mustgo.png',
+                      width: 36,
+                      height: 36,
+                      errorBuilder: (context, error, stack) {
+                        return const Icon(
+                          Icons.local_shipping_rounded,
+                          size: 32,
+                          color: Colors.white,
+                        );
+                      },
+                    ),
+                  ),
                   const SizedBox(width: 14),
                   // Sapaan
                   Expanded(
@@ -1717,29 +1671,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             builder: (_) => const PermissionGuideScreen(),
                           ),
                         );
-                      } else if (value == 'reset_trip') {
-                        _confirmCancelTrip();
                       } else if (value == 'logout') {
                         _confirmLogout();
                       }
                     },
                     itemBuilder: (_) => [
-                      if (_isTripStarted && !_isEntireRouteCompleted)
-                        const PopupMenuItem(
-                          value: 'reset_trip',
-                          height: 44,
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.home_work_outlined,
-                                size: 18,
-                                color: AppColors.orange,
-                              ),
-                              SizedBox(width: 10),
-                              Text('Kembali ke Beranda (Persiapan)'),
-                            ],
-                          ),
-                        ),
                       const PopupMenuItem(
                         value: 'check_update',
                         height: 44,
@@ -2344,13 +2280,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (_allSellers.isNotEmpty) {
             if (hasActiveTrip) {
               setState(() {
-                _userReturnedToHome = false;
                 _isTripStarted = true;
               });
               _startTimer();
             } else {
               setState(() {
-                _userReturnedToHome = false;
                 _completedStops.clear();
               });
               _startTripDirectly(_allSellers.first);
