@@ -124,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _getJenisLokasi(String? jenisStop) {
     if (jenisStop == 'gudang') return 'Gudang';
-    if (jenisStop == 'drop_point') return 'Gateway';
+    if (jenisStop == 'drop_point' || jenisStop == 'gateway') return 'Gateway';
     return 'Seller';
   }
 
@@ -464,6 +464,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _isEntireRouteCompleted = false;
             _currentStageDurations.clear();
             _completedStops.clear();
+            for (int s = 0; s < idx; s++) {
+              _completedStops.add(
+                CompletedStop(
+                  seller: parsedSellers[s],
+                  actualAwb: 0,
+                  actualKoli: 0,
+                  actualEcer: 0,
+                  actualHighValue: 0,
+                  totalDurationSeconds: 0,
+                  stageDurations: {},
+                ),
+              );
+            }
           }
         });
 
@@ -808,6 +821,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _lastSentLat = _latitude;
                 _lastSentLng = _longitude;
                 _lastSentTime = now;
+                String? locName = _currentSeller?.name;
+                if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
+                  if (_allSellers.isNotEmpty &&
+                      _completedStops.length + 1 < _allSellers.length) {
+                    locName = _allSellers[_completedStops.length + 1].name;
+                  }
+                } else if (_currentStage == TripStage.completed) {
+                  locName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
+                }
                 ApiClient.sendTrackingData(
                   latitude: _latitude,
                   longitude: _longitude,
@@ -817,6 +839,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   idDriver: _idDriver,
                   idKendaraan: _idKendaraan,
                   idRitase: _idRitase,
+                  namaLokasi: locName,
                 );
               }
             }
@@ -1305,7 +1328,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       // Kirim event "Bongkar Muat Barang" untuk lokasi ini beserta koli/ecer/hv & foto
       if (_idRitase > 0) {
-        ApiClient.sendStatusUpdate(
+        await ApiClient.sendStatusUpdate(
           idRitase: _idRitase,
           status: "mulai_loading",
           latitude: _latitude,
@@ -1402,14 +1425,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // 3. Kirim status transisi perjalanan baru (Sedang Menuju / Tiba) dengan koli: 0
     String? locationName = _currentSeller?.name ?? 'Selesai';
-    if (_currentStage == TripStage.enRoute) {
+    if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
       final nextIdx = _completedStops.length + 1;
       if (nextIdx < _allSellers.length) {
         locationName = _allSellers[nextIdx].name;
       }
     }
 
-    ApiClient.sendStatusUpdate(
+    await ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
       status: _stageToStatusKey(_currentStage),
       latitude: _latitude,
@@ -1422,7 +1445,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     if (_isEntireRouteCompleted && _idRitase > 0) {
-      ApiClient.finishRitase(_idRitase);
+      await ApiClient.finishRitase(_idRitase);
     }
 
     _sendInstantTracking(durasiDetik: finishedDuration);
@@ -2212,7 +2235,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 6),
           Text(
-            'Rute perjalanan dapat diakses mulai 1 jam sebelum jadwal resmi.',
+            'Rute perjalanan dapat diakses mulai 2 jam sebelum jadwal resmi.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12.5,
@@ -2353,16 +2376,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // ── Active trip seller card ──
   Widget _buildActiveTripSellerCard() {
-    final seller = _currentSeller;
-    if (seller == null) return const SizedBox.shrink();
-
-    final currentStopNum = _completedStops.length + 1;
+    SellerDummy? seller = _currentSeller;
+    int currentStopNum = _completedStops.length + 1;
     final totalStops = _allSellers.length;
+
+    if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
+      if (_allSellers.isNotEmpty && _completedStops.length + 1 < _allSellers.length) {
+        seller = _allSellers[_completedStops.length + 1];
+        currentStopNum = _completedStops.length + 2;
+      }
+    }
+
+    if (seller == null) return const SizedBox.shrink();
 
     String badgeText = 'LOKASI #$currentStopNum';
     if (seller.jenisStop == 'gudang') {
       badgeText = 'GUDANG — $currentStopNum/$totalStops';
-    } else if (seller.jenisStop == 'drop_point') {
+    } else if (seller.jenisStop == 'drop_point' || seller.jenisStop == 'gateway') {
       badgeText = 'GATEWAY — $currentStopNum/$totalStops';
     } else {
       badgeText = 'SELLER — $currentStopNum/$totalStops';

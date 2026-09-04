@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
-  // A. Production VPS:
+  // Production VPS:
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
     defaultValue: 'https://api.controltowerslb.tech/api/v1',
@@ -14,16 +14,6 @@ class ApiClient {
     'API_URL_FALLBACK',
     defaultValue: 'https://api.controltowerslb.tech/api/v1',
   );
-
-  // B. Production VPS (Di-comment saat testing lokal):
-  // static const String _defaultUrl = String.fromEnvironment(
-  //   'API_URL',
-  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
-  // );
-  // static const String _fallbackUrl = String.fromEnvironment(
-  //   'API_URL_FALLBACK',
-  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
-  // );
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
