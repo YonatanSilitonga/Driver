@@ -141,6 +141,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return 'Gudang Outgoing Utama';
   }
 
+  /// Cek apakah stop tertentu adalah titik akhir pengembalian armada (paling akhir rute).
+  bool _isFinalReturnStop(int stopIndex) {
+    if (_allSellers.isEmpty || stopIndex < 0 || stopIndex >= _allSellers.length) {
+      return false;
+    }
+    return stopIndex == _allSellers.length - 1;
+  }
+
+  /// Cek apakah stop yang sedang aktif saat ini adalah titik pengembalian armada (stop terakhir).
+  bool _isCurrentStopFinalReturn() {
+    return _isFinalReturnStop(_completedStops.length);
+  }
+
+  /// Cek apakah stop tertentu adalah aktivitas Bongkar Barang (Gateway).
+  /// Titik paling akhir rute adalah pengembalian armada, bukan bongkar muat barang.
+  bool _isStopUnloading(int stopIndex) {
+    if (_allSellers.isEmpty || stopIndex < 0 || stopIndex >= _allSellers.length) {
+      return false;
+    }
+    // Stop paling akhir adalah pengembalian armada
+    if (_isFinalReturnStop(stopIndex)) return false;
+
+    final jenis = _allSellers[stopIndex].jenisStop.toLowerCase();
+    return jenis == 'gateway';
+  }
+
+  /// Cek apakah stop yang sedang aktif saat ini adalah Bongkar Barang.
+  bool _isCurrentStopUnloading() {
+    return _isStopUnloading(_completedStops.length);
+  }
+
   List<dynamic> _vehicles = [];
   String? _selectedVehiclePlat;
   String? _selectedVehicleType;
@@ -217,11 +248,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _driverName = 'Driver';
   bool _hasLoadedBackendSellers = false;
   String? _scheduleWarning;
-  bool _canStart = true;
   bool _scheduleBlocked = false;
   String? _nextScheduleJamMulai;
   String? _nextScheduleJamSelesai;
   String? _nextScheduleJenisRitase;
+  String _ritaseStatus = '';
+  String _lastStatus = '';
 
   // ── Konstanta Smart GPS Tracking ──
   static const int _gpsRefreshEveryTicks = 8;
@@ -398,6 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
         final stopIndex = (data['current_stop_index'] as num?)?.toInt() ?? 0;
         final lastStatus = data['last_status']?.toString() ?? '';
+        final statusRitase = data['status']?.toString() ?? '';
 
         bool routeChanged = false;
         if (isSilentCheck &&
@@ -422,8 +455,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           setState(() {
             _idRitase = data['id_ritase'] ?? 0;
             _allSellers = parsedSellers;
+            _lastStatus = lastStatus;
+            _ritaseStatus = statusRitase;
             _scheduleWarning = data['schedule_warning']?.toString();
-            _canStart = data['can_start'] ?? true;
           });
           if (routeChanged && mounted) {
             _showRouteUpdatedNotification();
@@ -440,9 +474,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _idRitase = data['id_ritase'] ?? 0;
           _allSellers = parsedSellers;
           _stageStartedAt = stageStartedAt;
+          _lastStatus = lastStatus;
+          _ritaseStatus = statusRitase;
 
           _scheduleWarning = data['schedule_warning']?.toString();
-          _canStart = data['can_start'] ?? true;
 
           if (!_isTripStarted || _currentSeller == null) {
             final idx = stopIndex.clamp(0, parsedSellers.length - 1);
@@ -507,6 +542,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _isTripStarted = false;
           _isEntireRouteCompleted = true;
           _scheduleBlocked = false;
+          _lastStatus = '';
+          _ritaseStatus = '';
         });
       } else if (data != null) {
         bool wasActiveTrip = _isTripStarted && !_isEntireRouteCompleted;
@@ -539,6 +576,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _nextScheduleJamMulai = nextJamMulai;
           _nextScheduleJamSelesai = nextJamSelesai;
           _nextScheduleJenisRitase = nextJenisRitase;
+          _lastStatus = '';
+          _ritaseStatus = '';
           if (!wasActiveTrip && _isEntireRouteCompleted) {
           } else {
             _isEntireRouteCompleted = false;
@@ -571,12 +610,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Map status event server → stage mobile (buat resume setelah app di-kill).
   TripStage _mapStatusToStage(String status) {
     final s = status.toLowerCase().trim();
-    if (s.contains('menuju') || s.contains('berangkat') || s.contains('keluar'))
+    if (s.contains('menuju') || s.contains('berangkat') || s.contains('keluar')) {
       return TripStage.enRoute;
-    if (s.contains('tiba') || s.contains('sampai')) return TripStage.arrived;
-    if (s.contains('selesai')) return TripStage.completed;
-    if (s.contains('muat') || s.contains('loading') || s.contains('bongkar'))
+    }
+    if (s.contains('tiba') || s.contains('sampai')) {
+      return TripStage.arrived;
+    }
+    if (s.contains('selesai')) {
+      return TripStage.completed;
+    }
+    if (s.contains('muat') || s.contains('loading') || s.contains('bongkar')) {
       return TripStage.loadingGoods;
+    }
     return TripStage.loadingGoods;
   }
 
@@ -852,6 +897,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _isTripStarted = false;
       _isEntireRouteCompleted = false;
       _currentSeller = null;
+      _lastStatus = '';
+      _ritaseStatus = '';
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
       _stageStartedAt = null;
@@ -893,9 +940,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _startTimer();
     _sendInstantTracking();
+    final initialStatus = _isCurrentStopUnloading() ? 'Bongkar Barang' : 'Muat Barang';
     ApiClient.sendStatusUpdate(
       idRitase: _idRitase,
-      status: 'mulai_loading',
+      status: initialStatus,
       latitude: _latitude,
       longitude: _longitude,
       koli: _currentActualKoli,
@@ -950,8 +998,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _stageToStatusKey(TripStage stage) {
     switch (stage) {
       case TripStage.loadingGoods:
-        return 'Bongkar Muat Barang';
+        if (_isCurrentStopFinalReturn()) {
+          return 'Tiba';
+        }
+        return _isCurrentStopUnloading() ? 'Bongkar Barang' : 'Muat Barang';
       case TripStage.enRoute:
+        final nextStopIndex = _completedStops.length + 1;
+        if (_isFinalReturnStop(nextStopIndex)) {
+          return 'Kembali ke Gudang';
+        }
         return 'Sedang Menuju';
       case TripStage.arrived:
         return 'Tiba';
@@ -974,10 +1029,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return 'Bongkar Muat di $currentLocName';
+        if (_isCurrentStopFinalReturn()) {
+          return 'Tiba di $currentLocName (Pengembalian Mobil)';
+        }
+        final action = _isCurrentStopUnloading() ? 'Bongkar Barang' : 'Muat Barang';
+        return '$action di $currentLocName';
       case TripStage.enRoute:
+        final nextStopIndex = _completedStops.length + 1;
+        if (_isFinalReturnStop(nextStopIndex)) {
+          return 'Kembali ke ${destName ?? "Gudang Outgoing"}';
+        }
         return 'Sedang Menuju ${destName ?? currLoc}';
       case TripStage.arrived:
+        final nextStopIndex = _completedStops.length + 1;
+        if (_isFinalReturnStop(nextStopIndex) || _isCurrentStopFinalReturn()) {
+          return 'Tiba di ${destName ?? currentLocName} (Pengembalian Mobil)';
+        }
         return 'Tiba di ${destName ?? currLoc}';
       case TripStage.completed:
         return 'Selesai';
@@ -1289,11 +1356,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       _pickedManifestPhoto = null;
 
-      // Kirim event "Bongkar Muat Barang" untuk lokasi ini beserta koli/ecer/hv & foto
+      // Kirim event status perjalanan untuk lokasi ini
       if (_idRitase > 0) {
+        String statusEvent;
+        if (_isCurrentStopFinalReturn()) {
+          statusEvent = "Tiba";
+        } else if (_isCurrentStopUnloading()) {
+          statusEvent = "Bongkar Barang";
+        } else {
+          statusEvent = "Muat Barang";
+        }
         await ApiClient.sendStatusUpdate(
           idRitase: _idRitase,
-          status: "mulai_loading",
+          status: statusEvent,
           latitude: _latitude,
           longitude: _longitude,
           koli: lastInputKoli,
@@ -1361,7 +1436,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             );
           }
           final nextOriginIndex = _completedStops.length;
-          if (nextOriginIndex < _allSellers.length) {
+          if (nextOriginIndex < _allSellers.length && !_isFinalReturnStop(nextOriginIndex)) {
             _currentSeller = _allSellers[nextOriginIndex];
             _currentStage = TripStage.loadingGoods;
             _currentStageDurations.clear();
@@ -1374,6 +1449,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _ecerInputController.text = '0';
             _highValueInputController.text = '0';
           } else {
+            // Stop terakhir (pengembalian armada di gudang outgoing) telah tercapai -> trip selesai!
             _currentStage = TripStage.completed;
             _isEntireRouteCompleted = true;
           }
@@ -1939,6 +2015,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _isTripStarted = false;
       _isEntireRouteCompleted = false;
       _completedStops.clear();
+      _lastStatus = '';
+      _ritaseStatus = '';
       _currentStage = TripStage.loadingGoods;
       _activeStageSeconds = 0;
       _currentStageDurations.clear();
@@ -2266,11 +2344,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
   // ── CTA button ──
   Widget _buildStartButton() {
-    final bool hasActiveTrip =
-        _idRitase > 0 && _currentStage != TripStage.completed;
-    final String buttonText = hasActiveTrip
-        ? 'Lanjutkan Perjalanan'
-        : 'Mulai Perjalanan';
+    // Perjalanan dianggap "sedang aktif/berjalan" hanya jika status di server sudah 'berjalan',
+    // sudah ada event tracking perjalanan sebelumnya (lastStatus), atau sudah ada stop yang selesai.
+    // Jika rute baru dan belum pernah dimulai, tombol HARUS menampilkan "Mulai Perjalanan".
+    final bool hasActiveTrip = _isTripStarted ||
+        (_lastStatus.isNotEmpty &&
+            !_lastStatus.toLowerCase().contains('selesai')) ||
+        _ritaseStatus.toLowerCase() == 'berjalan' ||
+        _completedStops.isNotEmpty;
+
+    const String buttonText = 'Mulai Perjalanan';
 
     return SizedBox(
       width: double.infinity,
@@ -2289,9 +2372,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               });
               _startTripDirectly(_allSellers.first);
             }
+          } else {
+            _showSnack('Belum ada rute penugasan untuk ritase ini.');
           }
         },
-        icon: const Icon(Icons.play_arrow_rounded, size: 26),
+        icon: Icon(
+          hasActiveTrip ? Icons.play_arrow_rounded : Icons.navigation_rounded,
+          size: 26,
+        ),
         label: Text(
           buttonText,
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -2325,8 +2413,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     String badgeText = 'LOKASI #$currentStopNum';
     if (seller.jenisStop == 'gudang') {
-      badgeText = 'GUDANG — $currentStopNum/$totalStops';
-    } else if (seller.jenisStop == 'drop_point' || seller.jenisStop == 'gateway') {
+      if (currentStopNum == totalStops) {
+        badgeText = 'PULANG GUDANG — $currentStopNum/$totalStops';
+      } else {
+        badgeText = 'ASAL GUDANG — $currentStopNum/$totalStops';
+      }
+    } else if (seller.jenisStop == 'drop_point') {
+      badgeText = 'DROP POINT — $currentStopNum/$totalStops';
+    } else if (seller.jenisStop == 'gateway') {
       badgeText = 'GATEWAY — $currentStopNum/$totalStops';
     } else {
       badgeText = 'SELLER — $currentStopNum/$totalStops';
@@ -2562,10 +2656,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const SizedBox(height: 14),
           // Timeline
           _buildTimeline(),
-          // Input form during loading stage (di setiap titik muat barang)
+          // Input form during loading stage (di setiap titik muat barang) atau kartu status pengembalian armada di akhir
           if (_currentStage == TripStage.loadingGoods) ...[
             const SizedBox(height: 12),
-            _buildDriverFriendlyInputForm(),
+            if (_isCurrentStopFinalReturn())
+              _buildGudangReturnCard()
+            else
+              _buildDriverFriendlyInputForm(),
+          ] else if (_currentStage == TripStage.arrived &&
+              (_isFinalReturnStop(_completedStops.length + 1) || _isCurrentStopFinalReturn())) ...[
+            const SizedBox(height: 12),
+            _buildGudangReturnCard(),
           ],
           const SizedBox(height: 12),
           // Next stage button
@@ -2598,6 +2699,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+
+
+  /// Tampilan konfirmasi ketika armada tiba kembali di Gudang Outgoing (pengembalian mobil)
+  Widget _buildGudangReturnCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF86EFAC)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: const BoxDecoration(
+              color: Color(0xFFDCFCE7),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.warehouse_rounded,
+              color: Color(0xFF16A34A),
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Pengembalian Armada',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF166534),
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Kendaraan telah tiba di Gudang Outgoing. Pastikan kendaraan terparkir dengan aman di pool, lalu tekan tombol di bawah untuk menyelesaikan ritase ini.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF15803D),
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTimeline() {
     final segmentCount = (_allSellers.length - 1).clamp(1, 99);
     final List<_TimelineStep> steps = [];
@@ -2607,20 +2765,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final destination = _allSellers[seg + 1];
       final destType = _getJenisLokasi(destination.jenisStop);
 
+      final isDestFinalReturn = _isFinalReturnStop(seg + 1);
+
+      final String originAction;
+      final String originSubtitle;
+      final IconData originIcon;
+
+      if (_isStopUnloading(seg)) {
+        originAction = 'Bongkar Barang di ${origin.name}';
+        originSubtitle = 'Bongkar paket & verifikasi';
+        originIcon = Icons.unarchive_outlined;
+      } else {
+        originAction = 'Muat Barang di ${origin.name}';
+        originSubtitle = 'Proses pengisian muatan';
+        originIcon = Icons.inventory_2_outlined;
+      }
+
       steps.add(
         _TimelineStep(
-          title: 'Bongkar Muat di ${origin.name}',
-          subtitle: 'Proses pengisian muatan',
-          icon: Icons.inventory_2_outlined,
+          title: originAction,
+          subtitle: originSubtitle,
+          icon: originIcon,
           segIndex: seg,
           stageIndex: 0,
         ),
       );
       steps.add(
         _TimelineStep(
-          title: 'Menuju ${destination.name}',
-          subtitle: 'Perjalanan ke $destType',
-          icon: Icons.navigation_outlined,
+          title: isDestFinalReturn ? 'Kembali ke ${destination.name}' : 'Menuju ${destination.name}',
+          subtitle: isDestFinalReturn ? 'Kembali mengembalikan armada' : 'Perjalanan ke $destType',
+          icon: isDestFinalReturn ? Icons.assignment_return_outlined : Icons.navigation_outlined,
           segIndex: seg,
           stageIndex: 1,
         ),
@@ -2628,8 +2802,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       steps.add(
         _TimelineStep(
           title: 'Tiba di ${destination.name}',
-          subtitle: 'Sampai di $destType',
-          icon: Icons.location_on_outlined,
+          subtitle: isDestFinalReturn ? 'Sampai di titik pengembalian armada' : 'Sampai di $destType',
+          icon: isDestFinalReturn ? Icons.warehouse_rounded : Icons.location_on_outlined,
           segIndex: seg,
           stageIndex: 2,
         ),
@@ -2813,10 +2987,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Masukan Muatan Barang',
-                  style: TextStyle(
+                  _isCurrentStopUnloading()
+                      ? 'Konfirmasi Bongkar Barang'
+                      : 'Masukan Muatan Barang',
+                  style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
                     color: AppColors.textPrimary,
@@ -2855,7 +3031,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: _pickedManifestPhoto != null
-                    ? AppColors.success.withOpacity(0.5)
+                    ? AppColors.success.withValues(alpha: 0.5)
                     : AppColors.borderLight,
               ),
             ),
@@ -2887,7 +3063,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: AppColors.success.withOpacity(0.12),
+                          color: AppColors.success.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: const Text(
@@ -2923,7 +3099,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.7),
+                              color: Colors.black.withValues(alpha: 0.7),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Row(
@@ -3171,7 +3347,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   String _getNextStageButtonLabel() {
-    final isLastStop = _completedStops.length + 1 >= _allSellers.length;
     String? nextDestName;
     if (_allSellers.isNotEmpty &&
         _completedStops.length + 1 < _allSellers.length) {
@@ -3182,18 +3357,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ? _allSellers[_completedStops.length].name
         : (_currentSeller?.name ?? 'Lokasi');
 
+    final nextStopIndex = _completedStops.length + 1;
+    final isNextUnloading = _isStopUnloading(nextStopIndex);
+    final isNextFinalReturn = _isFinalReturnStop(nextStopIndex);
+
     switch (_currentStage) {
       case TripStage.loadingGoods:
-        return isLastStop
-            ? 'Selesai Bongkar → Selesai Perjalanan'
-            : 'Selesai Muat → Berangkat';
+        if (_isCurrentStopFinalReturn()) {
+          return 'Selesaikan Ritase & Parkir Mobil';
+        }
+        final hasMoreStops = _completedStops.length + 1 < _allSellers.length;
+        if (_isCurrentStopUnloading()) {
+          if (isNextFinalReturn) {
+            return 'Selesai Bongkar → Kembali ke ${nextDestName ?? "Gudang"}';
+          }
+          return hasMoreStops
+              ? 'Selesai Bongkar → Menuju ${nextDestName ?? "Tujuan"}'
+              : 'Selesai Bongkar → Selesaikan Rute';
+        }
+        if (isNextFinalReturn) {
+          return 'Selesai Muat → Kembali ke ${nextDestName ?? "Gudang"}';
+        }
+        return 'Selesai Muat → Berangkat';
       case TripStage.enRoute:
+        if (isNextFinalReturn) {
+          return 'Tiba di ${nextDestName ?? "Gudang"}';
+        }
         return 'Tiba di ${nextDestName ?? currentOriginName}';
       case TripStage.arrived:
         final arrivedLoc = nextDestName ?? currentOriginName;
-        return isLastStop
+        if (isNextFinalReturn || _isCurrentStopFinalReturn()) {
+          return 'Selesaikan Ritase & Parkir Mobil';
+        }
+        return isNextUnloading
             ? 'Mulai Bongkar di $arrivedLoc'
-            : 'Mulai Bongkar Muat di $arrivedLoc';
+            : 'Mulai Muat di $arrivedLoc';
       case TripStage.completed:
         return 'Selesai Perjalanan';
     }

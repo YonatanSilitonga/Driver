@@ -5,15 +5,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
-  // Production VPS:
+  // Development Backend Local (Via ADB Reverse USB):
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://127.0.0.1:8081/api/v1',
   );
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://192.168.159.244:8081/api/v1',
   );
+
+  // Production VPS (Aktifkan saat release/deploy):
+  // static const String _defaultUrl = String.fromEnvironment(
+  //   'API_URL',
+  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  // );
+  // static const String _fallbackUrl = String.fromEnvironment(
+  //   'API_URL_FALLBACK',
+  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  // );
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
@@ -21,6 +31,12 @@ class ApiClient {
 
   /// Base URL API yang sedang aktif (default/fallback yang berhasil dipakai).
   static String get baseUrl => _activeBaseUrl;
+
+  /// Reset active base URL kembali ke default URL (127.0.0.1:8081 via ADB).
+  static void resetToBaseUrl() {
+    _activeBaseUrl = _defaultUrl;
+    _dio = null;
+  }
 
   static Dio get dio {
     _dio ??= _createDio();
@@ -61,7 +77,7 @@ class ApiClient {
                   isNgrokOffline) &&
               _activeBaseUrl == _defaultUrl &&
               _fallbackUrl != _defaultUrl) {
-            // ngrok tidak terjangkau -> coba fallback
+            // Coba fallback URL
             _activeBaseUrl = _fallbackUrl;
             _dio = null;
             try {
@@ -73,7 +89,11 @@ class ApiClient {
                 options: Options(method: opts.method, headers: opts.headers),
               );
               return handler.resolve(response);
-            } catch (_) {}
+            } catch (_) {
+              // Jika fallback juga gagal, kembalikan ke default URL agar tidak tersangkut di IP mati
+              _activeBaseUrl = _defaultUrl;
+              _dio = null;
+            }
           }
           handler.next(e);
         },

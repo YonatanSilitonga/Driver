@@ -16,10 +16,7 @@ import 'api_client.dart';
 ///   - Logout → `stopBackgroundTracking()`
 ///   - Android 10+: izin "Izinkan semua waktu" diaktifkan manual di Settings.
 ///   - HP Xiaomi/OPPO/Vivo: exempt dari battery optimization biar gak di-kill.
-final _kBaseUrl = String.fromEnvironment(
-  'API_URL',
-  defaultValue: 'https://api.controltowerslb.tech/api/v1',
-);
+
 
 /// Dio khusus background — pakai token dari penyimpanan (WAJIB, endpoint /driver/* JWT).
 Future<Dio> _bgDio() async {

@@ -256,6 +256,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Ambil viewInsets dari context sebelum Scaffold (karena Scaffold mereset viewInsets di child bodynya)
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final isKeyboardOpen = bottomInset > 20.0;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -266,7 +270,7 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       },
       child: Scaffold(
-        resizeToAvoidBottomInset: false,
+        resizeToAvoidBottomInset: true,
         backgroundColor: const Color(0xFFF8F9FA),
         body: Stack(
           children: [
@@ -284,32 +288,64 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
 
-            // 2. KONTEN UTAMA (SCROLLABLE)
+            // 2. AKSEN GELOMBANG BAWAH (ORANGE & BLUE WAVE)
+            // Hanya tampil saat keyboard TERTUTUP dan diletakkan DI BELAKANG konten utama
+            // agar tidak pernah menutupi input atau tombol login
+            if (!isKeyboardOpen)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Image.asset(
+                    'assets/images/bottom_waves.png',
+                    width: MediaQuery.sizeOf(context).width,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) =>
+                        const SizedBox.shrink(),
+                  ),
+                ),
+              ),
+
+            // 3. KONTEN UTAMA (SCROLLABLE & DI DEPAN GELOMBANG)
             SafeArea(
               child: Align(
                 alignment: Alignment.topCenter,
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.only(left: 24, right: 24, top: 60),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.only(
+                    left: 24,
+                    right: 24,
+                    top: isKeyboardOpen ? 12 : 48,
+                    bottom: isKeyboardOpen ? 24 : 32,
+                  ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
-                      Image.asset(
-                        'assets/images/logo_mustgo.png',
-                        height: 120,
-                        width: 120,
-                        errorBuilder: (context, error, stackTrace) =>
-                            const Icon(
-                              Icons.local_shipping_rounded,
-                              size: 80,
-                              color: Color(0xFF0D47A1),
-                            ),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        height: isKeyboardOpen ? 48 : 110,
+                        width: isKeyboardOpen ? 48 : 110,
+                        child: Image.asset(
+                          'assets/images/logo_mustgo.png',
+                          errorBuilder: (context, error, stackTrace) =>
+                              Icon(
+                            Icons.local_shipping_rounded,
+                            size: isKeyboardOpen ? 36 : 80,
+                            color: const Color(0xFF0D47A1),
+                          ),
+                        ),
                       ),
 
-                      const SizedBox(height: 32),
+                      SizedBox(height: isKeyboardOpen ? 10 : 28),
 
                       // KARTU FORM LOGIN
                       Container(
-                        padding: const EdgeInsets.all(28.0),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isKeyboardOpen ? 20.0 : 28.0,
+                          vertical: isKeyboardOpen ? 18.0 : 28.0,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(24),
@@ -325,28 +361,29 @@ class _LoginScreenState extends State<LoginScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             // Judul & Subtitle
-                            const Text(
+                            Text(
                               "Selamat Datang",
                               style: TextStyle(
-                                fontSize: 26,
+                                fontSize: isKeyboardOpen ? 22 : 26,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1E293B),
+                                color: const Color(0xFF1E293B),
                               ),
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 6),
                             const Text(
                               "Silahkan login menggunakan akun anda masing masing",
                               style: TextStyle(
-                                fontSize: 14,
+                                fontSize: 13,
                                 color: Color(0xFF64748B),
                               ),
                             ),
 
-                            const SizedBox(height: 32),
+                            SizedBox(height: isKeyboardOpen ? 16 : 28),
 
                             // Input Username
                             TextField(
                               controller: _usernameController,
+                              textInputAction: TextInputAction.next,
                               decoration: InputDecoration(
                                 labelText: 'Username',
                                 labelStyle: const TextStyle(
@@ -366,12 +403,16 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
 
-                            const SizedBox(height: 20),
+                            SizedBox(height: isKeyboardOpen ? 14 : 20),
 
                             // Input Password
                             TextField(
                               controller: _passwordController,
                               obscureText: _isPasswordObscured,
+                              textInputAction: TextInputAction.done,
+                              onSubmitted: (_) {
+                                if (!_isLoading) _handleLogin();
+                              },
                               decoration: InputDecoration(
                                 labelText: 'Password',
                                 labelStyle: const TextStyle(
@@ -406,7 +447,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
 
-                            const SizedBox(height: 36),
+                            SizedBox(height: isKeyboardOpen ? 20 : 36),
 
                             // Tombol Log In
                             SizedBox(
@@ -434,7 +475,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                             const SizedBox(height: 8),
 
-                            // Lupa password (tanpa OTP â€” verifikasi username + no_hp)
+                            // Lupa password (tanpa OTP — verifikasi username + no_hp)
                             Align(
                               alignment: Alignment.center,
                               child: TextButton(
@@ -457,53 +498,39 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
 
-                      const SizedBox(height: 24),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
+                      if (!isKeyboardOpen) ...[
+                        const SizedBox(height: 24),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1F5F9),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: FutureBuilder<PackageInfo>(
+                            future: PackageInfo.fromPlatform(),
+                            builder: (context, snapshot) {
+                              final v = snapshot.data?.version ?? '1.2.1';
+                              return Text(
+                                'Versi $v',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF115C93),
+                                  letterSpacing: 0.5,
+                                ),
+                              );
+                            },
+                          ),
                         ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
-                        ),
-                        child: FutureBuilder<PackageInfo>(
-                          future: PackageInfo.fromPlatform(),
-                          builder: (context, snapshot) {
-                            final v = snapshot.data?.version ?? '1.0.3';
-                            return Text(
-                              'Versi $v',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF115C93),
-                                letterSpacing: 0.5,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                      ],
 
-                      const SizedBox(height: 60),
+                      SizedBox(height: isKeyboardOpen ? 20 : 60),
                     ],
                   ),
-                ),
-              ),
-            ),
-
-            // 3. AKSEN GELOMBANG BAWAH (ORANGE & BLUE WAVE)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: IgnorePointer(
-                child: Image.asset(
-                  'assets/images/bottom_waves.png',
-                  width: MediaQuery.of(context).size.width,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox.shrink(),
                 ),
               ),
             ),
