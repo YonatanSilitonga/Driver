@@ -12,6 +12,7 @@ class AuthService {
         '/auth/login',
         data: {
           'email': email,
+          'username': email,
           'password': password,
         },
       );

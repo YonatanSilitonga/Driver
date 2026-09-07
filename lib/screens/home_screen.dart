@@ -143,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Cek apakah stop tertentu adalah titik akhir pengembalian armada (paling akhir rute).
   bool _isFinalReturnStop(int stopIndex) {
-    if (_allSellers.isEmpty || stopIndex < 0 || stopIndex >= _allSellers.length) {
+    if (_allSellers.length <= 1 || stopIndex < 0 || stopIndex >= _allSellers.length) {
       return false;
     }
     return stopIndex == _allSellers.length - 1;

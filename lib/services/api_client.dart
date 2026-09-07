@@ -6,24 +6,24 @@ import '../utils/network_exception.dart';
 
 class ApiClient {
   // Development Backend Local (Via ADB Reverse USB):
-  static const String _defaultUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: 'http://127.0.0.1:8081/api/v1',
-  );
-  static const String _fallbackUrl = String.fromEnvironment(
-    'API_URL_FALLBACK',
-    defaultValue: 'http://192.168.159.244:8081/api/v1',
-  );
-
-  // Production VPS (Aktifkan saat release/deploy):
   // static const String _defaultUrl = String.fromEnvironment(
   //   'API_URL',
-  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  //   defaultValue: 'http://127.0.0.1:8081/api/v1',
   // );
   // static const String _fallbackUrl = String.fromEnvironment(
   //   'API_URL_FALLBACK',
-  //   defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  //   defaultValue: 'http://192.168.159.244:8081/api/v1',
   // );
+
+  // Production VPS (Aktif saat release/deploy):
+  static const String _defaultUrl = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  );
+  static const String _fallbackUrl = String.fromEnvironment(
+    'API_URL_FALLBACK',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  );
   static const String _tokenKey = 'auth_token';
 
   static Dio? _dio;
