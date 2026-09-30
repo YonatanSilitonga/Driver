@@ -7,6 +7,7 @@ import '../utils/network_exception.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 import 'kapten_home_screen.dart';
+import 'pickup/pickup_home_screen.dart';
 import 'permission_guide_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -95,39 +96,46 @@ class _SplashScreenState extends State<SplashScreen>
         try {
           final user = await AuthService.me();
           if (user != null) {
+
             // Route berdasarkan role
             final role = await ApiClient.getUserRole();
-            if (role == 'kapten') {
-              destination = const KaptenHomeScreen();
-            } else {
-              destination = const HomeScreen();
+            final userRole = (user['role'] ?? '').toString().trim().toLowerCase();
+            final isPickup = userRole == 'driver_pickup' || role == 'driver_pickup';
+            final isKapten = userRole == 'kapten' || role == 'kapten';
+            destination = isPickup
+                ? const PickupHomeScreen()
+                : (isKapten ? const KaptenHomeScreen() : const HomeScreen());
+            if (!isKapten) {
               try {
                 await startBackgroundTracking();
               } catch (_) {}
-            }
-          } else {
+            } else {
             // Token invalid/expired dari server → bersihkan sesi
             await ApiClient.clearToken();
-          }
+          }}
         } on NetworkException catch (netErr) {
           if (netErr.type == NetworkErrorType.unauthorized) {
             // Sesi memang sudah invalid dari server (401/403)
             await ApiClient.clearToken();
           } else {
-            // Offline atau timeout saat validasi -> Tetap masuk ke HomeScreen (Offline-First)
-            final role = await ApiClient.getUserRole();
-            if (role == 'kapten') {
+// Offline atau timeout saat validasi -> cek role tersimpan di HP
+            final cfg = await ApiClient.loadDriverConfig();
+            final savedRole = (cfg['role'] ?? '').toString().trim().toLowerCase();
+            if (savedRole == 'kapten') {
               destination = const KaptenHomeScreen();
+            } else if (savedRole == 'driver_pickup') {
+              destination = const PickupHomeScreen();
             } else {
               destination = const HomeScreen();
               try {
                 await startBackgroundTracking();
               } catch (_) {}
             }
-          }
-        } catch (_) {
-          // Error jaringan umum -> Masuk ke HomeScreen (Offline-First)
-          destination = const HomeScreen();
+        }} catch (_) {
+          // Error jaringan umum -> Cek role tersimpan di HP
+          final cfg = await ApiClient.loadDriverConfig();
+          final isPickup = (cfg['role'] ?? '').toString().trim().toLowerCase() == 'driver_pickup';
+          destination = isPickup ? const PickupHomeScreen() : const HomeScreen();
         }
       }
     } catch (_) {

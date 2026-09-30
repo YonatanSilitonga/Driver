@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
+  // Production VPS:
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
     defaultValue: 'http://10.86.178.182:8080/api/v1',
@@ -118,20 +119,27 @@ class ApiClient {
     return token != null && token.isNotEmpty;
   }
 
-  // ── Konfigurasi identitas driver / kendaraan / ritase ──
+  // ── Konfigurasi identitas driver / kendaraan / ritase / role ──
   static const String _keyIdDriver = 'config_id_driver';
   static const String _keyIdKendaraan = 'config_id_kendaraan';
   static const String _keyIdRitase = 'config_id_ritase';
   static const String _keyDriverName = 'config_driver_name';
   static const String _keyUserRole = 'config_user_role';
   static const String _keySellerId = 'config_seller_id';
+  static const String _keyIdUser = 'config_id_user';
+  static const String _keyUsername = 'config_username';
+  static const String _keyPlatNomor = 'config_plat_nomor';
 
-  // Simpan konfigurasi identitas tracking (dipakai di halaman pengaturan)
+  // Simpan konfigurasi identitas tracking & session
   static Future<void> saveDriverConfig({
     required int idDriver,
     required int idKendaraan,
     required int idRitase,
     String? driverName,
+    String? role,
+    int? idUser,
+    String? username,
+    String? platNomor,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyIdDriver, idDriver);
@@ -140,10 +148,21 @@ class ApiClient {
     if (driverName != null && driverName.isNotEmpty) {
       await prefs.setString(_keyDriverName, driverName);
     }
+    if (role != null && role.isNotEmpty) {
+      await prefs.setString(_keyUserRole, role);
+    }
+    if (idUser != null && idUser > 0) {
+      await prefs.setInt(_keyIdUser, idUser);
+    }
+    if (username != null && username.isNotEmpty) {
+      await prefs.setString(_keyUsername, username);
+    }
+    if (platNomor != null && platNomor.isNotEmpty) {
+      await prefs.setString(_keyPlatNomor, platNomor);
+    }
   }
 
-  // Ambil konfigurasi identitas tracking (identitas murni dari hasil login —
-  // tidak ada default AWALUDIN lagi; 0 = belum terisi).
+  // Ambil konfigurasi identitas tracking & session
   static Future<Map<String, dynamic>> loadDriverConfig() async {
     final prefs = await SharedPreferences.getInstance();
     return {
@@ -151,6 +170,10 @@ class ApiClient {
       'id_kendaraan': prefs.getInt(_keyIdKendaraan) ?? 0,
       'id_ritase': prefs.getInt(_keyIdRitase) ?? 0,
       'driver_name': prefs.getString(_keyDriverName) ?? '',
+      'role': prefs.getString(_keyUserRole) ?? '',
+      'id_user': prefs.getInt(_keyIdUser) ?? 0,
+      'username': prefs.getString(_keyUsername) ?? '',
+      'plat_nomor': prefs.getString(_keyPlatNomor) ?? '',
     };
   }
 
@@ -184,6 +207,9 @@ class ApiClient {
   static Future<int> getSellerId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_keySellerId) ?? 0;
+    await prefs.remove(_keyIdUser);
+    await prefs.remove(_keyUsername);
+    await prefs.remove(_keyPlatNomor);
   }
 
   /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
@@ -305,6 +331,28 @@ class ApiClient {
       } catch (e2) {
         print('❌ [GPS TRACKING] Gagal juga setelah retry: $e2');
       }
+    }
+  }
+
+  /// Kirim sinyal offline ke server agar kendaraan langsung hilang dari peta live tracking Fadel
+  static Future<void> sendTrackingOffline({
+    required int idKendaraan,
+    required int idDriver,
+  }) async {
+    if (idKendaraan <= 0 && idDriver <= 0) return;
+    try {
+      print('📴 [GPS TRACKING] Mengirim sinyal offline untuk kendaraan=$idKendaraan driver=$idDriver');
+      await dio.post(
+        '/driver/tracking',
+        data: {
+          'offline': true,
+          'id_kendaraan': idKendaraan,
+          'id_driver': idDriver,
+        },
+      );
+      print('✅ [GPS TRACKING] Sinyal offline berhasil diterima backend (dihapus dari peta).');
+    } catch (e) {
+      print('⚠️ [GPS TRACKING] Gagal kirim sinyal offline: $e');
     }
   }
 

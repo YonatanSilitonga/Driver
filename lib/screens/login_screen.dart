@@ -8,6 +8,7 @@ import '../services/app_updater.dart';
 import '../utils/network_exception.dart';
 import 'home_screen.dart';
 import 'seller_selection_screen.dart';
+import 'pickup/pickup_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'permission_guide_screen.dart';
 
@@ -123,11 +124,19 @@ class _LoginScreenState extends State<LoginScreen> {
             final driverName =
                 (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
                     .toString();
+            final userRole =
+                (user['role'] ?? '').toString().trim().toLowerCase();
+            final idUser = _toInt(user['id_user']);
+            final username = (user['username'] ?? '').toString();
+
             await ApiClient.saveDriverConfig(
               idDriver: idDriver,
               idKendaraan: idKendaraan,
               idRitase: 0,
               driverName: driverName,
+              role: userRole,
+              idUser: idUser,
+              username: username,
             );
 
             // Simpan role user
@@ -188,17 +197,20 @@ class _LoginScreenState extends State<LoginScreen> {
           await PermissionGuideScreen.maybeShowOnce(context);
 
           if (!mounted) return;
-
-          // Route berdasarkan role
-          final role = await ApiClient.getUserRole();
-          final destinationWidget = role == 'kapten'
-              ? const SellerSelectionScreen()
-              : const HomeScreen();
+// Route berdasarkan role
+final role = await ApiClient.getUserRole();
+final userRole = (user['role'] ?? '').toString().trim().toLowerCase();
+final isDriverPickup = userRole == 'driver_pickup' || role == 'driver_pickup';
+final isKapten = userRole == 'kapten' || role == 'kapten';
+final destinationWidget = isDriverPickup
+    ? const PickupHomeScreen()
+    : (isKapten ? const SellerSelectionScreen() : const HomeScreen());
 
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
               transitionDuration: const Duration(milliseconds: 400),
               pageBuilder: (_, _, _) => destinationWidget,
+
               transitionsBuilder: (_, animation, _, child) {
                 return FadeTransition(opacity: animation, child: child);
               },
