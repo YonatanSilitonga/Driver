@@ -5,24 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
-  // Development Backend Local (Via ADB Reverse USB):
-  // static const String _defaultUrl = String.fromEnvironment(
-  //   'API_URL',
-  //   defaultValue: 'http://127.0.0.1:8081/api/v1',
-  // );
-  // static const String _fallbackUrl = String.fromEnvironment(
-  //   'API_URL_FALLBACK',
-  //   defaultValue: 'http://192.168.159.244:8081/api/v1',
-  // );
-
-  // Production VPS (Aktif saat release/deploy):
   static const String _defaultUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://10.86.178.182:8080/api/v1',
   );
+  // Fallback: ADB Reverse (USB cable)
   static const String _fallbackUrl = String.fromEnvironment(
     'API_URL_FALLBACK',
-    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+    defaultValue: 'http://127.0.0.1:8080/api/v1',
   );
   static const String _tokenKey = 'auth_token';
 
@@ -133,6 +123,8 @@ class ApiClient {
   static const String _keyIdKendaraan = 'config_id_kendaraan';
   static const String _keyIdRitase = 'config_id_ritase';
   static const String _keyDriverName = 'config_driver_name';
+  static const String _keyUserRole = 'config_user_role';
+  static const String _keySellerId = 'config_seller_id';
 
   // Simpan konfigurasi identitas tracking (dipakai di halaman pengaturan)
   static Future<void> saveDriverConfig({
@@ -169,6 +161,29 @@ class ApiClient {
     await prefs.remove(_keyIdKendaraan);
     await prefs.remove(_keyIdRitase);
     await prefs.remove(_keyDriverName);
+    await prefs.remove(_keyUserRole);
+    await prefs.remove(_keySellerId);
+  }
+
+  // ── Konfigurasi role user (driver/kapten) ──
+  static Future<void> saveUserRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyUserRole, role);
+  }
+
+  static Future<String> getUserRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyUserRole) ?? 'driver';
+  }
+
+  static Future<void> saveSellerId(int sellerId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keySellerId, sellerId);
+  }
+
+  static Future<int> getSellerId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_keySellerId) ?? 0;
   }
 
   /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
@@ -564,5 +579,237 @@ class ApiClient {
       print('❌ [API] Gagal addStop: $e');
     }
     return null;
+  }
+
+  // ── KAPTEN ENDPOINTS ──
+
+  /// Ambil info seller kapten yang sedang login
+  static Future<Map<String, dynamic>?> fetchKaptenSellerInfo() async {
+    try {
+      final res = await dio.get('/kapten/seller-info');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+    } catch (e) {
+      print('❌ [KAPTEN] Gagal fetchSellerInfo: $e');
+    }
+    return null;
+  }
+
+  /// Ambil data cargo hari ini untuk lokasi kapten (pre-fill form)
+  static Future<Map<String, dynamic>?> fetchTodayCargo({int? idRitase, String? jenisRitase, int? ritaseKe}) async {
+    try {
+      final params = <String>[];
+      if (idRitase != null && idRitase > 0) params.add('id_ritase=$idRitase');
+      if (jenisRitase != null && jenisRitase.isNotEmpty) params.add('jenis_ritase=$jenisRitase');
+      if (ritaseKe != null && ritaseKe > 0) params.add('ritase_ke=$ritaseKe');
+      final query = params.isNotEmpty ? '?${params.join('&')}' : '';
+      final res = await dio.get('/kapten/today-cargo$query');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+    } catch (e) {
+      print('❌ [KAPTEN] Gagal fetchTodayCargo: $e');
+    }
+    return null;
+  }
+
+  /// Ambil daftar ritase yang singgah di seller kapten hari ini
+  static Future<List<Map<String, dynamic>>> fetchKaptenRitase() async {
+    try {
+      final res = await dio.get('/kapten/my-seller-ritase');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is List) {
+          return List<Map<String, dynamic>>.from(body['data']);
+        } else if (body is List) {
+          return List<Map<String, dynamic>>.from(body);
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Kapten input data muatan (12 field + foto)
+  static Future<Map<String, dynamic>?> submitKaptenCargo({
+    required int idRitase,
+    required int idStop,
+    required String jenisRitase,
+    required int ritaseKe,
+    required int jumlahAwb,
+    required int koliJkt, required int koliSeg, required int koliBtn,
+    required int ecerJkt, required int ecerSeg, required int ecerBtn,
+    required int koliHvJkt, required int koliHvSeg, required int koliHvBtn,
+    required int ecerHvJkt, required int ecerHvSeg, required int ecerHvBtn,
+    String? namaLokasi,
+    double? latitude,
+    double? longitude,
+    String? fotoManifestUrl,
+    String? catatan,
+  }) async {
+    try {
+      final res = await dio.post('/kapten/cargo-input', data: {
+        'id_ritase': idRitase,
+        'id_stop': idStop,
+        'jenis_ritase': jenisRitase,
+        'ritase_ke': ritaseKe,
+        'nama_lokasi': namaLokasi ?? '',
+        'latitude': latitude ?? 0,
+        'longitude': longitude ?? 0,
+        'jumlah_awb': jumlahAwb,
+        'koli_jkt': koliJkt, 'koli_seg': koliSeg, 'koli_btn': koliBtn,
+        'ecer_jkt': ecerJkt, 'ecer_seg': ecerSeg, 'ecer_btn': ecerBtn,
+        'koli_hv_jkt': koliHvJkt, 'koli_hv_seg': koliHvSeg, 'koli_hv_btn': koliHvBtn,
+        'ecer_hv_jkt': ecerHvJkt, 'ecer_hv_seg': ecerHvSeg, 'ecer_hv_btn': ecerHvBtn,
+        'foto_manifest_url': fotoManifestUrl ?? '',
+        'catatan': catatan ?? '',
+      });
+      if (res.statusCode == 201 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  // ── KAPTEN MULTI-SELLER ──
+
+  /// Ambil daftar seller yang bisa diakses kapten
+  static Future<List<Map<String, dynamic>>> getMySellers() async {
+    try {
+      final res = await dio.get('/kapten/my-sellers');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is Map) {
+          final data = body['data'];
+          if (data['sellers'] is List) {
+            return List<Map<String, dynamic>>.from(data['sellers']);
+          }
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Pilih seller → return token baru dengan seller_id yang dipilih
+  static Future<Map<String, dynamic>?> selectSeller(int sellerId) async {
+    try {
+      final res = await dio.post('/kapten/select-seller', data: {
+        'seller_id': sellerId,
+      });
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  // ── KAPTEN KONFIRMASI PENGAMBILAN ──
+
+  /// Ambil grup input hari ini yang belum ter-link ke ritase (bahan konfirmasi)
+  static Future<List<Map<String, dynamic>>> fetchPendingConfirmations() async {
+    try {
+      final res = await dio.get('/kapten/pending-confirmations');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is List) {
+          return List<Map<String, dynamic>>.from(body['data']);
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Konfirmasi driver pengambil: tautkan semua input NULL dalam grup
+  /// (jenis_ritase + ritase_ke) hari ini ke ritase pilihan kapten SEKALIGUS
+  /// mencatat realisasi pengambilan (diambil_*, foto, catatan).
+  /// Return {'id_ritase': ..., 'total_linked': ..., 'id_konfirmasi': ..., 'sisa': {...}}.
+  static Future<Map<String, dynamic>?> confirmPickup({
+    required String jenisRitase,
+    required int ritaseKe,
+    required int idRitase,
+    int jumlahAwb = 0,
+    int koliJkt = 0, int koliSeg = 0, int koliBtn = 0,
+    int ecerJkt = 0, int ecerSeg = 0, int ecerBtn = 0,
+    int koliHvJkt = 0, int koliHvSeg = 0, int koliHvBtn = 0,
+    int ecerHvJkt = 0, int ecerHvSeg = 0, int ecerHvBtn = 0,
+    String? fotoPenjemputanUrl,
+    String? catatan,
+  }) async {
+    try {
+      final res = await dio.post('/kapten/confirm-pickup', data: {
+        'jenis_ritase': jenisRitase,
+        'ritase_ke': ritaseKe,
+        'id_ritase': idRitase,
+        'diambil_awb': jumlahAwb,
+        'diambil_koli_jkt': koliJkt, 'diambil_koli_seg': koliSeg, 'diambil_koli_btn': koliBtn,
+        'diambil_ecer_jkt': ecerJkt, 'diambil_ecer_seg': ecerSeg, 'diambil_ecer_btn': ecerBtn,
+        'diambil_koli_hv_jkt': koliHvJkt, 'diambil_koli_hv_seg': koliHvSeg, 'diambil_koli_hv_btn': koliHvBtn,
+        'diambil_ecer_hv_jkt': ecerHvJkt, 'diambil_ecer_hv_seg': ecerHvSeg, 'diambil_ecer_hv_btn': ecerHvBtn,
+        'foto_penjemputan_url': fotoPenjemputanUrl ?? '',
+        'catatan': catatan ?? '',
+      });
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Riwayat serah terima hari ini + sisa per grup.
+  /// Return {'riwayat': [...], 'sisa_grup': [...]}.
+  static Future<Map<String, dynamic>?> fetchKonfirmasiPenjemputan() async {
+    try {
+      final res = await dio.get('/kapten/konfirmasi-penjemputan');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is Map) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
   }
 }

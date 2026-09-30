@@ -7,6 +7,7 @@ import '../services/background_tracking.dart';
 import '../services/app_updater.dart';
 import '../utils/network_exception.dart';
 import 'home_screen.dart';
+import 'seller_selection_screen.dart';
 import 'forgot_password_screen.dart';
 import 'permission_guide_screen.dart';
 
@@ -128,6 +129,16 @@ class _LoginScreenState extends State<LoginScreen> {
               idRitase: 0,
               driverName: driverName,
             );
+
+            // Simpan role user
+            final role = (user['role'] ?? 'driver').toString();
+            await ApiClient.saveUserRole(role);
+
+            // Simpan seller_id jika ada (untuk kapten)
+            final sellerId = _toInt(user['id_seller'], fallback: 0);
+            if (sellerId > 0) {
+              await ApiClient.saveSellerId(sellerId);
+            }
           } catch (e) {
             // ignore: avoid_print
             print('⚠️ Gagal set config tracking: $e');
@@ -177,10 +188,17 @@ class _LoginScreenState extends State<LoginScreen> {
           await PermissionGuideScreen.maybeShowOnce(context);
 
           if (!mounted) return;
+
+          // Route berdasarkan role
+          final role = await ApiClient.getUserRole();
+          final destinationWidget = role == 'kapten'
+              ? const SellerSelectionScreen()
+              : const HomeScreen();
+
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
               transitionDuration: const Duration(milliseconds: 400),
-              pageBuilder: (_, _, _) => const HomeScreen(),
+              pageBuilder: (_, _, _) => destinationWidget,
               transitionsBuilder: (_, animation, _, child) {
                 return FadeTransition(opacity: animation, child: child);
               },

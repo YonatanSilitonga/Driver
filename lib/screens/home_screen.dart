@@ -30,6 +30,7 @@ class SellerDummy {
   final String jenisStop;
   final double? latitude;
   final double? longitude;
+  final bool isImplant;
 
   const SellerDummy({
     required this.id,
@@ -41,6 +42,7 @@ class SellerDummy {
     this.jenisStop = 'seller',
     this.latitude,
     this.longitude,
+    this.isImplant = false,
   });
 }
 
@@ -185,19 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   final List<CompletedStop> _completedStops = [];
 
-  final TextEditingController _awbInputController = TextEditingController(
-    text: '0',
-  );
-  final TextEditingController _koliInputController = TextEditingController(
-    text: '0',
-  );
-  final TextEditingController _ecerInputController = TextEditingController(
-    text: '0',
-  );
-  final TextEditingController _highValueInputController = TextEditingController(
-    text: '0',
-  );
-
+  // Input controllers removed — only kapten inputs cargo data
   int _currentActualAwb = 0;
   int _currentActualKoli = 0;
   int _currentActualEcer = 0;
@@ -422,6 +412,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             longitude: m['longitude'] != null
                 ? (m['longitude'] as num).toDouble()
                 : null,
+            isImplant: m['is_implant'] == true,
           );
         }).toList();
 
@@ -789,10 +780,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _stopwatchTimer?.cancel();
     _watchdogTimer?.cancel();
     _routePollingTimer?.cancel();
-    _awbInputController.dispose();
-    _koliInputController.dispose();
-    _ecerInputController.dispose();
-    _highValueInputController.dispose();
     for (final c in _cardControllers) {
       c?.dispose();
     }
@@ -908,10 +895,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _currentActualKoli = 0;
       _currentActualEcer = 0;
       _currentActualHighValue = 0;
-      _awbInputController.text = '0';
-      _koliInputController.text = '0';
-      _ecerInputController.text = '0';
-      _highValueInputController.text = '0';
       _latitude = -6.2024;
       _longitude = 106.6522;
       _gpsTick = 0;
@@ -932,10 +915,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _currentActualKoli = 0;
       _currentActualEcer = 0;
       _currentActualHighValue = 0;
-      _awbInputController.text = '0';
-      _koliInputController.text = '0';
-      _ecerInputController.text = '0';
-      _highValueInputController.text = '0';
     });
 
     _startTimer();
@@ -1324,23 +1303,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _nextStage() async {
-    int lastInputKoli = 0;
-    int lastInputEcer = 0;
-    int lastInputHighValue = 0;
     final finishedStage = _currentStage;
     final finishedDuration =
         _currentStageDurations[finishedStage] ?? _activeStageSeconds;
 
     // 1. Jika baru saja menyelesaikan proses bongkar muat (loadingGoods)
     if (_currentStage == TripStage.loadingGoods) {
-      lastInputKoli = int.tryParse(_koliInputController.text.trim()) ?? 0;
-      lastInputEcer = int.tryParse(_ecerInputController.text.trim()) ?? 0;
-      lastInputHighValue =
-          int.tryParse(_highValueInputController.text.trim()) ?? 0;
-      _currentActualKoli += lastInputKoli;
-      _currentActualEcer += lastInputEcer;
-      _currentActualHighValue += lastInputHighValue;
-
       // Upload foto (jika ada) terlebih dahulu agar URL-nya langsung lengkap
       String? photoUrl;
       final photoToUpload = _pickedManifestPhoto;
@@ -1356,7 +1324,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       _pickedManifestPhoto = null;
 
-      // Kirim event status perjalanan untuk lokasi ini
+      // Kirim event status perjalanan untuk lokasi ini (driver hanya upload foto, tidak input muatan)
       if (_idRitase > 0) {
         String statusEvent;
         if (_isCurrentStopFinalReturn()) {
@@ -1371,9 +1339,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           status: statusEvent,
           latitude: _latitude,
           longitude: _longitude,
-          koli: lastInputKoli,
-          ecer: lastInputEcer,
-          highValue: lastInputHighValue,
+          koli: 0,
+          ecer: 0,
+          highValue: 0,
           namaLokasi: _currentSeller?.name,
           fotoManifestUrl: photoUrl,
         );
@@ -1444,10 +1412,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _currentActualKoli = 0;
             _currentActualEcer = 0;
             _currentActualHighValue = 0;
-            _awbInputController.text = '0';
-            _koliInputController.text = '0';
-            _ecerInputController.text = '0';
-            _highValueInputController.text = '0';
           } else {
             // Stop terakhir (pengembalian armada di gudang outgoing) telah tercapai -> trip selesai!
             _currentStage = TripStage.completed;
@@ -2657,12 +2621,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Timeline
           _buildTimeline(),
           // Input form during loading stage (di setiap titik muat barang) atau kartu status pengembalian armada di akhir
+          // Sembunyikan input form jika seller adalah implant (data sudah diinput kapten)
           if (_currentStage == TripStage.loadingGoods) ...[
             const SizedBox(height: 12),
             if (_isCurrentStopFinalReturn())
               _buildGudangReturnCard()
+            else if (!(_currentSeller?.isImplant ?? false))
+              _buildDriverFriendlyInputForm()
             else
-              _buildDriverFriendlyInputForm(),
+              _buildImplantSkipCard(),
           ] else if (_currentStage == TripStage.arrived &&
               (_isFinalReturnStop(_completedStops.length + 1) || _isCurrentStopFinalReturn())) ...[
             const SizedBox(height: 12),
@@ -2745,6 +2712,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   style: TextStyle(
                     fontSize: 12,
                     color: Color(0xFF15803D),
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImplantSkipCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF93C5FD)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: const BoxDecoration(
+              color: Color(0xFFDBEAFE),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.inventory_2_rounded,
+              color: Color(0xFF2563EB),
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Seller Implant',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1E40AF),
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Data muatan (AWB, koli, HV) sudah diinput oleh Kapten. Anda tinggal ambil barang yang sudah dipaketkan, lalu tekan tombol di bawah untuk melanjutkan perjalanan.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF1D4ED8),
                     height: 1.4,
                   ),
                 ),
@@ -2981,7 +3002,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(
-                  Icons.touch_app,
+                  Icons.camera_alt_rounded,
                   color: Colors.white,
                   size: 16,
                 ),
@@ -2991,7 +3012,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 child: Text(
                   _isCurrentStopUnloading()
                       ? 'Konfirmasi Bongkar Barang'
-                      : 'Masukan Muatan Barang',
+                      : 'Upload Foto Bukti',
                   style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 13,
@@ -3001,26 +3022,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          _buildVerticalStepperControl(
-            label: 'Jumlah Koli',
-            controller: _koliInputController,
-            icon: Icons.inventory_2,
-            color: AppColors.orange,
-          ),
-          const SizedBox(height: 10),
-          _buildVerticalStepperControl(
-            label: 'Jumlah Ecer(Pcs)',
-            controller: _ecerInputController,
-            icon: Icons.widgets_outlined,
-            color: const Color(0xFF1E88E5),
-          ),
-          const SizedBox(height: 10),
-          _buildVerticalStepperControl(
-            label: 'Jumlah High Value (Pcs)',
-            controller: _highValueInputController,
-            icon: Icons.workspace_premium_outlined,
-            color: const Color(0xFF8E24AA),
+          const SizedBox(height: 4),
+          Text(
+            'Data muatan diinput oleh Kapten. Anda cukup upload foto bukti.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
           ),
           const SizedBox(height: 12),
           // 📷 Foto Bukti Manifest
@@ -3137,211 +3142,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildVerticalStepperControl({
-    required String label,
-    required TextEditingController controller,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderLight),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildStepperButton(
-                icon: Icons.remove,
-                color: AppColors.error,
-                onTap: () {
-                  int val = int.tryParse(controller.text.trim()) ?? 0;
-                  if (val > 0) {
-                    setState(() {
-                      controller.text = (val - 1).toString();
-                    });
-                  }
-                },
-              ),
-              const SizedBox(width: 16),
-              SizedBox(
-                width: 80,
-                child: TextField(
-                  controller: controller,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.textPrimary,
-                  ),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(vertical: 6),
-                    border: InputBorder.none,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              _buildStepperButton(
-                icon: Icons.add,
-                color: AppColors.success,
-                onTap: () {
-                  int val = int.tryParse(controller.text.trim()) ?? 0;
-                  setState(() {
-                    controller.text = (val + 1).toString();
-                  });
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildQuickChip(
-                  controller: controller,
-                  amount: 10,
-                  label: '+10',
-                ),
-                const SizedBox(width: 6),
-                _buildQuickChip(
-                  controller: controller,
-                  amount: 100,
-                  label: '+100',
-                ),
-                const SizedBox(width: 6),
-                _buildQuickChip(
-                  controller: controller,
-                  amount: 1000,
-                  label: '+1000',
-                ),
-                const SizedBox(width: 6),
-                _buildResetChip(controller: controller),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepperButton({
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: color.withValues(alpha: 0.06),
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            border: Border.all(color: color.withValues(alpha: 0.3)),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, color: color, size: 22),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuickChip({
-    required TextEditingController controller,
-    required int amount,
-    required String label,
-  }) {
-    return Material(
-      color: AppColors.orange.withValues(alpha: 0.08),
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
-        onTap: () {
-          int val = int.tryParse(controller.text.trim()) ?? 0;
-          setState(() {
-            controller.text = (val + amount).toString();
-          });
-        },
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: AppColors.orange.withValues(alpha: 0.3)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: AppColors.orange,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildResetChip({required TextEditingController controller}) {
-    return Material(
-      color: AppColors.borderLight,
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            controller.text = '0';
-          });
-        },
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: AppColors.borderLight),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.refresh, size: 12, color: AppColors.textSecondary),
-              const SizedBox(width: 3),
-              Text(
-                'Reset',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

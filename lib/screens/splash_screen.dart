@@ -6,6 +6,7 @@ import '../services/background_tracking.dart';
 import '../utils/network_exception.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
+import 'kapten_home_screen.dart';
 import 'permission_guide_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -94,10 +95,16 @@ class _SplashScreenState extends State<SplashScreen>
         try {
           final user = await AuthService.me();
           if (user != null) {
-            destination = const HomeScreen();
-            try {
-              await startBackgroundTracking();
-            } catch (_) {}
+            // Route berdasarkan role
+            final role = await ApiClient.getUserRole();
+            if (role == 'kapten') {
+              destination = const KaptenHomeScreen();
+            } else {
+              destination = const HomeScreen();
+              try {
+                await startBackgroundTracking();
+              } catch (_) {}
+            }
           } else {
             // Token invalid/expired dari server → bersihkan sesi
             await ApiClient.clearToken();
@@ -108,10 +115,15 @@ class _SplashScreenState extends State<SplashScreen>
             await ApiClient.clearToken();
           } else {
             // Offline atau timeout saat validasi -> Tetap masuk ke HomeScreen (Offline-First)
-            destination = const HomeScreen();
-            try {
-              await startBackgroundTracking();
-            } catch (_) {}
+            final role = await ApiClient.getUserRole();
+            if (role == 'kapten') {
+              destination = const KaptenHomeScreen();
+            } else {
+              destination = const HomeScreen();
+              try {
+                await startBackgroundTracking();
+              } catch (_) {}
+            }
           }
         } catch (_) {
           // Error jaringan umum -> Masuk ke HomeScreen (Offline-First)
