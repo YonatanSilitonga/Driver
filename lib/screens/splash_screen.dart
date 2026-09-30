@@ -6,6 +6,7 @@ import '../services/background_tracking.dart';
 import '../utils/network_exception.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
+import 'pickup/pickup_home_screen.dart';
 import 'permission_guide_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -94,7 +95,9 @@ class _SplashScreenState extends State<SplashScreen>
         try {
           final user = await AuthService.me();
           if (user != null) {
-            destination = const HomeScreen();
+            final role = (user['role'] ?? '').toString().trim().toLowerCase();
+            final isPickup = role == 'driver_pickup';
+            destination = isPickup ? const PickupHomeScreen() : const HomeScreen();
             try {
               await startBackgroundTracking();
             } catch (_) {}
@@ -107,15 +110,19 @@ class _SplashScreenState extends State<SplashScreen>
             // Sesi memang sudah invalid dari server (401/403)
             await ApiClient.clearToken();
           } else {
-            // Offline atau timeout saat validasi -> Tetap masuk ke HomeScreen (Offline-First)
-            destination = const HomeScreen();
+            // Offline atau timeout saat validasi -> Cek role tersimpan di HP
+            final cfg = await ApiClient.loadDriverConfig();
+            final isPickup = (cfg['role'] ?? '').toString().trim().toLowerCase() == 'driver_pickup';
+            destination = isPickup ? const PickupHomeScreen() : const HomeScreen();
             try {
               await startBackgroundTracking();
             } catch (_) {}
           }
         } catch (_) {
-          // Error jaringan umum -> Masuk ke HomeScreen (Offline-First)
-          destination = const HomeScreen();
+          // Error jaringan umum -> Cek role tersimpan di HP
+          final cfg = await ApiClient.loadDriverConfig();
+          final isPickup = (cfg['role'] ?? '').toString().trim().toLowerCase() == 'driver_pickup';
+          destination = isPickup ? const PickupHomeScreen() : const HomeScreen();
         }
       }
     } catch (_) {

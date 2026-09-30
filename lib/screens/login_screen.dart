@@ -7,6 +7,7 @@ import '../services/background_tracking.dart';
 import '../services/app_updater.dart';
 import '../utils/network_exception.dart';
 import 'home_screen.dart';
+import 'pickup/pickup_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'permission_guide_screen.dart';
 
@@ -122,11 +123,19 @@ class _LoginScreenState extends State<LoginScreen> {
             final driverName =
                 (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
                     .toString();
+            final userRole =
+                (user['role'] ?? '').toString().trim().toLowerCase();
+            final idUser = _toInt(user['id_user']);
+            final username = (user['username'] ?? '').toString();
+
             await ApiClient.saveDriverConfig(
               idDriver: idDriver,
               idKendaraan: idKendaraan,
               idRitase: 0,
               driverName: driverName,
+              role: userRole,
+              idUser: idUser,
+              username: username,
             );
           } catch (e) {
             // ignore: avoid_print
@@ -177,10 +186,16 @@ class _LoginScreenState extends State<LoginScreen> {
           await PermissionGuideScreen.maybeShowOnce(context);
 
           if (!mounted) return;
+          final userRole =
+              (user['role'] ?? '').toString().trim().toLowerCase();
+          final isDriverPickup = userRole == 'driver_pickup';
+
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
               transitionDuration: const Duration(milliseconds: 400),
-              pageBuilder: (_, _, _) => const HomeScreen(),
+              pageBuilder: (_, _, _) => isDriverPickup
+                  ? const PickupHomeScreen()
+                  : const HomeScreen(),
               transitionsBuilder: (_, animation, _, child) {
                 return FadeTransition(opacity: animation, child: child);
               },
