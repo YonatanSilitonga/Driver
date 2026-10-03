@@ -43,15 +43,18 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
   /// groupKey -> key untuk scroll dari tombol "Penjemputan kedua"
   final Map<String, GlobalKey> _groupKeys = {};
 
+  // Warna aksen per kategori (selaras layar input kapten).
   static const _takenSections = [
     {
       'title': 'AWB',
+      'color': 0xFF6D28D9,
       'fields': [
         {'key': 'jumlah_awb', 'label': 'AWB'},
       ],
     },
     {
       'title': 'Koli',
+      'color': 0xFF1E40AF,
       'fields': [
         {'key': 'koli_jkt', 'label': 'JKT'},
         {'key': 'koli_seg', 'label': 'SEG'},
@@ -60,26 +63,26 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     },
     {
       'title': 'Eceran',
+      'color': 0xFF16A34A,
       'fields': [
         {'key': 'ecer_jkt', 'label': 'JKT'},
         {'key': 'ecer_seg', 'label': 'SEG'},
         {'key': 'ecer_btn', 'label': 'BTN'},
       ],
     },
+    // Opsi A: HV digabung 1 field (nilai disimpan di jkt, seg/btn = 0).
     {
       'title': 'Koli High Value',
+      'color': 0xFFF59E0B,
       'fields': [
-        {'key': 'koli_hv_jkt', 'label': 'JKT'},
-        {'key': 'koli_hv_seg', 'label': 'SEG'},
-        {'key': 'koli_hv_btn', 'label': 'BTN'},
+        {'key': 'koli_hv_jkt', 'label': 'Jumlah'},
       ],
     },
     {
-      'title': 'Eceran High Value',
+      'title': 'HV AWB',
+      'color': 0xFFEA580C,
       'fields': [
-        {'key': 'ecer_hv_jkt', 'label': 'JKT'},
-        {'key': 'ecer_hv_seg', 'label': 'SEG'},
-        {'key': 'ecer_hv_btn', 'label': 'BTN'},
+        {'key': 'ecer_hv_jkt', 'label': 'Jumlah'},
       ],
     },
   ];
@@ -109,6 +112,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
 
   int _clamp0(int v) => v < 0 ? 0 : v;
 
+  /// Teks prefill: sisa > 0 tampil angka, sisa 0 tampil kosong (hint '0').
+  /// Parser (_takenInt) membaca string kosong sebagai 0, jadi submit tetap aman.
+  String _prefillText(int v) => v > 0 ? '$v' : '';
+
   String _groupKey(String jenis, int ritKe) => '${jenis}__$ritKe';
 
   /// Entri sisa grup (dari backend) berdasarkan jenis+rit.
@@ -133,7 +140,30 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     final sisa = _sisaEntry(jenis, ritKe);
     if (sisa != null) {
       final sKey = metricKey == 'jumlah_awb' ? 'sisa_jumlah_awb' : 'sisa_$metricKey';
-      if (sisa.containsKey(sKey)) return _clamp0(_toInt(sisa[sKey]));
+      // HV gabungan: alias baru bila ada, fallback jumlah legacy jkt+seg+btn
+      // agar data lama sebelum dihapus tetap tampil sebagai total.
+      // Bila tidak ada key HV sama sekali, lanjut ke fallback pending di bawah.
+      if (metricKey == 'koli_hv_jkt') {
+        const keys = ['sisa_koli_hv', 'sisa_koli_hv_jkt', 'sisa_koli_hv_seg', 'sisa_koli_hv_btn'];
+        if (keys.any(sisa.containsKey)) {
+          final alias = _toInt(sisa['sisa_koli_hv']);
+          if (alias > 0) return _clamp0(alias);
+          return _clamp0(_toInt(sisa['sisa_koli_hv_jkt']) +
+              _toInt(sisa['sisa_koli_hv_seg']) +
+              _toInt(sisa['sisa_koli_hv_btn']));
+        }
+      } else if (metricKey == 'ecer_hv_jkt') {
+        const keys = ['sisa_hv_awb', 'sisa_ecer_hv', 'sisa_ecer_hv_jkt', 'sisa_ecer_hv_seg', 'sisa_ecer_hv_btn'];
+        if (keys.any(sisa.containsKey)) {
+          final alias = _toInt(sisa['sisa_hv_awb']) + _toInt(sisa['sisa_ecer_hv']);
+          if (alias > 0) return _clamp0(alias);
+          return _clamp0(_toInt(sisa['sisa_ecer_hv_jkt']) +
+              _toInt(sisa['sisa_ecer_hv_seg']) +
+              _toInt(sisa['sisa_ecer_hv_btn']));
+        }
+      } else if (sisa.containsKey(sKey)) {
+        return _clamp0(_toInt(sisa[sKey]));
+      }
     }
     final pending = _pendingEntry(jenis, ritKe);
     if (pending != null) {
@@ -244,7 +274,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         for (final section in _takenSections) {
           for (final f in (section['fields'] as List)) {
             final mkey = (f as Map)['key'] as String;
-            map[mkey] = TextEditingController(text: '${_sisaMetric(key, jenis, ritKe, mkey)}');
+            final c = TextEditingController(
+                text: _prefillText(_sisaMetric(key, jenis, ritKe, mkey)));
+            c.addListener(_onTakenChanged);
+            map[mkey] = c;
           }
         }
         _takenCtrls[key] = map;
@@ -283,23 +316,6 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     return m != null ? m.group(1)! : t;
   }
 
-  /// Isi ulang kolom diambil = sisa saat ini ("Ambil semua").
-  void _refillTaken(String key, String jenis, int ritKe) {
-    final ctrls = _takenCtrls[key];
-    if (ctrls == null) return;
-    setState(() {
-      for (final section in _takenSections) {
-        for (final f in (section['fields'] as List)) {
-          final mkey = (f as Map)['key'] as String;
-          ctrls[mkey]?.text = '${_sisaMetric(key, jenis, ritKe, mkey)}';
-        }
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Diisi = sisa saat ini.')),
-    );
-  }
-
   Future<void> _pickHandoverFoto(String key) async {
     try {
       final picked = await ImagePicker().pickImage(
@@ -323,9 +339,38 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     return v < 0 ? 0 : v;
   }
 
+  /// Total semua kolom diambil dalam grup. Tombol konfirmasi aktif
+  /// hanya bila total > 0 (minimal satu angka terisi; foto tidak dihitung).
+  int _takenTotal(String key) {
+    final ctrls = _takenCtrls[key];
+    if (ctrls == null) return 0;
+    var sum = 0;
+    for (final mkey in ctrls.keys) {
+      sum += _takenInt(key, mkey);
+    }
+    return sum;
+  }
+
+  bool _canConfirm(String key) => _takenTotal(key) > 0;
+
+  /// Refresh status tombol konfirmasi saat nilai diambil diketik.
+  void _onTakenChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _confirm(String key, String jenis, int ritKe) async {
     final idRitase = _selectedRitase[ritKe];
     if (idRitase == null || _confirming.contains(ritKe)) return;
+    // Pertahanan: tolak kirim bila semua kolom diambil kosong/nol.
+    if (!_canConfirm(key)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Minimal isi salah satu jumlah yang diambil driver')),
+        );
+      }
+      return;
+    }
     setState(() => _confirming.add(ritKe));
     try {
       // Upload foto serah terima dulu (opsional — gagal upload tidak menghalangi).
@@ -355,12 +400,13 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         ecerJkt: _takenInt(key, 'ecer_jkt'),
         ecerSeg: _takenInt(key, 'ecer_seg'),
         ecerBtn: _takenInt(key, 'ecer_btn'),
+        // HV gabungan: nilai disimpan di jkt, seg/btn = 0.
         koliHvJkt: _takenInt(key, 'koli_hv_jkt'),
-        koliHvSeg: _takenInt(key, 'koli_hv_seg'),
-        koliHvBtn: _takenInt(key, 'koli_hv_btn'),
+        koliHvSeg: 0,
+        koliHvBtn: 0,
         ecerHvJkt: _takenInt(key, 'ecer_hv_jkt'),
-        ecerHvSeg: _takenInt(key, 'ecer_hv_seg'),
-        ecerHvBtn: _takenInt(key, 'ecer_hv_btn'),
+        ecerHvSeg: 0,
+        ecerHvBtn: 0,
         fotoPenjemputanUrl: fotoUrl,
         catatan: _catatanCtrls[key]?.text.trim(),
       );
@@ -536,7 +582,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                         if (_riwayat.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           const Text(
-                            'Serah Terima Hari Ini',
+                            'Pengambilan Hari Ini',
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
                           ),
                           const SizedBox(height: 8),
@@ -589,7 +635,14 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -599,7 +652,9 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0D47A1),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0D47A1), Color(0xFF2563EB)],
+                  ),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -623,10 +678,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
             spacing: 8,
             runSpacing: 4,
             children: [
-              _statChip('Sisa: $sAwb AWB'),
-              _statChip('$sKoli Koli'),
-              _statChip('$sEcer Ecer'),
-              _statChip('$sHv HV'),
+              _statChip('Sisa: $sAwb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
+              _statChip('$sKoli Koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
+              _statChip('$sEcer Ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
+              _statChip('$sHv HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
             ],
           ),
           const SizedBox(height: 12),
@@ -640,7 +695,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                 border: Border.all(color: const Color(0xFFFDE047)),
               ),
               child: const Text(
-                'Belum ada jadwal driver untuk Rit ini — menunggu admin generate.',
+                'Driver belum ditugaskan untuk mengambil muatan.',
                 style: TextStyle(fontSize: 12, color: Color(0xFF854D0E)),
               ),
             )
@@ -720,22 +775,13 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                 ),
               )
             else ...[
-              Row(
-                children: [
-                  const Text(
-                    'Jumlah yang diambil driver:',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
-                  ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: busy ? null : () => _refillTaken(key, jenis, ritKe),
-                    icon: const Icon(Icons.checklist_rounded, size: 16),
-                    label: const Text('Ambil semua', style: TextStyle(fontSize: 11)),
-                  ),
-                ],
-              ),
               const Text(
-                'Terisi otomatis = sisa saat ini. Hanya kolom yang bersisa yang tampil.',
+                'Jumlah yang diambil driver:',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'Hanya kolom yang bersisa yang tampil.',
                 style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
               ),
               const SizedBox(height: 6),
@@ -744,6 +790,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                     (section['title'] as String?) ?? '',
                     ((section['fields'] as List?) ?? []).cast<Map<String, String>>(),
                     busy,
+                    Color((section['color'] as int?) ?? 0xFF0D47A1),
                   )),
             ],
             const SizedBox(height: 8),
@@ -788,26 +835,44 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
               style: const TextStyle(fontSize: 13),
             ),
             const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF16A34A),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: (selected == null || busy) ? null : () => _confirm(key, jenis, ritKe),
-                icon: busy
-                    ? const SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.check_rounded, color: Colors.white),
-                label: Text(
-                  busy ? 'Menyimpan...' : 'Konfirmasi Driver',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                ),
-              ),
+            Builder(
+              builder: (context) {
+                final enabled = selected != null && !busy && _canConfirm(key);
+                final labelColor =
+                    enabled ? Colors.white : const Color(0xFF94A3B8);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!enabled && !busy)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 6),
+                        
+                      ),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF16A34A),
+                          disabledBackgroundColor: const Color(0xFFE2E8F0),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                        onPressed: enabled ? () => _confirm(key, jenis, ritKe) : null,
+                        icon: busy
+                            ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Icon(Icons.check_rounded, color: labelColor),
+                        label: Text(
+                          busy ? 'Menyimpan...' : 'Konfirmasi Driver',
+                          style: TextStyle(color: labelColor, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ],
         ],
@@ -815,7 +880,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     );
   }
 
-  Widget _buildTakenSection(String groupKey, String title, List<Map<String, String>> fields, bool busy) {
+  Widget _buildTakenSection(String groupKey, String title, List<Map<String, String>> fields, bool busy, Color accent) {
     // Tampilkan hanya field yang sisanya > 0.
     final visible = fields.where((f) {
       final parts = groupKey.split('__');
@@ -829,9 +894,19 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF0D47A1)),
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: accent),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           Row(
@@ -849,7 +924,23 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                     textAlign: TextAlign.center,
                     decoration: InputDecoration(
                       labelText: label,
-                      labelStyle: const TextStyle(fontSize: 10),
+                      labelStyle: TextStyle(fontSize: 10, color: accent),
+                      hintText: '0',
+                      hintStyle: const TextStyle(
+                        color: Color(0xFFCBD5E1),
+                        fontSize: 13,
+                        fontWeight: FontWeight.normal,
+                      ),
+                      filled: true,
+                      fillColor: accent.withValues(alpha: 0.06),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: accent.withValues(alpha: 0.35)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(color: accent, width: 1.5),
+                      ),
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                     ),
@@ -931,10 +1022,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
             spacing: 6,
             runSpacing: 4,
             children: [
-              _statChip('Diambil: $awb AWB'),
-              _statChip('$koli koli'),
-              _statChip('$ecer ecer'),
-              _statChip('$hv HV'),
+              _statChip('Diambil: $awb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
+              _statChip('$koli koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
+              _statChip('$ecer ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
+              _statChip('$hv HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -1034,16 +1125,16 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     );
   }
 
-  Widget _statChip(String text) {
+  Widget _statChip(String text, Color bgColor, Color textColor) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
+        color: bgColor,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor),
       ),
     );
   }
