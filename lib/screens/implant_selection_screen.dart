@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import 'kapten_home_screen.dart';
 
-class SellerSelectionScreen extends StatefulWidget {
-  const SellerSelectionScreen({super.key});
+class ImplantSelectionScreen extends StatefulWidget {
+  const ImplantSelectionScreen({super.key});
 
   @override
-  State<SellerSelectionScreen> createState() => _SellerSelectionScreenState();
+  State<ImplantSelectionScreen> createState() => _ImplantSelectionScreenState();
 }
 
-class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
-  List<Map<String, dynamic>> _sellers = [];
+class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
+  List<Map<String, dynamic>> _implants = [];
   bool _isLoading = true;
   String? _error;
   bool _isSelecting = false;
@@ -18,41 +18,41 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSellers();
+    _loadImplants();
   }
 
-  Future<void> _loadSellers() async {
+  Future<void> _loadImplants() async {
     try {
-      final sellers = await ApiClient.getMySellers();
+      final implants = await ApiClient.getMyImplants();
       if (mounted) {
         setState(() {
-          _sellers = sellers;
+          _implants = implants;
           _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Gagal memuat daftar seller: $e';
+          _error = 'Gagal memuat daftar implant: $e';
           _isLoading = false;
         });
       }
     }
   }
 
-  Future<void> _selectSeller(Map<String, dynamic> seller) async {
-    final sellerId = seller['id_seller'] as int?;
-    if (sellerId == null) return;
+  Future<void> _selectImplant(Map<String, dynamic> implant) async {
+    final implantId = implant['id_implant'] as int?;
+    if (implantId == null) return;
 
     setState(() => _isSelecting = true);
 
     try {
-      final result = await ApiClient.selectSeller(sellerId);
+      final result = await ApiClient.selectImplant(implantId);
       if (result != null && mounted) {
         final token = result['token'] as String?;
         if (token != null && token.isNotEmpty) {
           await ApiClient.saveToken(token);
-          await ApiClient.saveSellerId(sellerId);
+          await ApiClient.saveImplantId(implantId);
           await ApiClient.saveUserRole('kapten');
 
           if (!mounted) return;
@@ -60,7 +60,7 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
             context,
             MaterialPageRoute(builder: (_) => const KaptenHomeScreen()),
           ).then((_) {
-            if (mounted) _loadSellers();
+            if (mounted) _loadImplants();
           });
         }
       }
@@ -69,7 +69,7 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
         setState(() => _isSelecting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Gagal memilih seller: $e'),
+            content: Text('Gagal memilih implant: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -104,7 +104,7 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Pilih seller implant yang sedang Anda kerjakan:',
+                'Pilih implant yang sedang Anda kerjakan:',
                 style: TextStyle(
                   fontSize: 14,
                   color: Color(0xFF64748B),
@@ -142,13 +142,13 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  _isLoading = true;
-                  _error = null;
-                });
-                _loadSellers();
-              },
+                onPressed: () {
+                  setState(() {
+                    _isLoading = true;
+                    _error = null;
+                  });
+                  _loadImplants();
+                },
               child: const Text('Coba Lagi'),
             ),
           ],
@@ -156,25 +156,26 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
       );
     }
 
-    if (_sellers.isEmpty) {
+    if (_implants.isEmpty) {
       return const Center(
         child: Text(
-          'Tidak ada seller yang tersedia',
+          'Tidak ada implant yang tersedia',
           style: TextStyle(color: Color(0xFF64748B)),
         ),
       );
     }
 
     return ListView.separated(
-      itemCount: _sellers.length,
+      itemCount: _implants.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
-        final seller = _sellers[index];
-        final namaSeller = seller['nama_seller'] ?? '-';
-        final kodeSeller = seller['kode_seller'] ?? '';
+        final implant = _implants[index];
+        final namaImplant = implant['nama_implant'] ?? '-';
+        final kodeImplant = implant['kode_implant'] ?? '';
+        final peran = implant['peran'] ?? 'utama';
 
         return InkWell(
-          onTap: _isSelecting ? null : () => _selectSeller(seller),
+          onTap: _isSelecting ? null : () => _selectImplant(implant),
           borderRadius: BorderRadius.circular(12),
           child: Container(
             padding: const EdgeInsets.all(16),
@@ -211,21 +212,31 @@ class _SellerSelectionScreenState extends State<SellerSelectionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        namaSeller,
+                        namaImplant,
                         style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF0F172A),
                         ),
                       ),
-                      if (kodeSeller.isNotEmpty)
+                      if (kodeImplant.isNotEmpty)
                         Text(
-                          kodeSeller,
+                          kodeImplant,
                           style: const TextStyle(
                             fontSize: 12,
                             color: Color(0xFF94A3B8),
                           ),
                         ),
+                      Text(
+                        peran == 'cadangan' ? 'Cadangan' : 'Utama',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: peran == 'cadangan'
+                              ? const Color(0xFF0284C7)
+                              : const Color(0xFF059669),
+                        ),
+                      ),
                     ],
                   ),
                 ),

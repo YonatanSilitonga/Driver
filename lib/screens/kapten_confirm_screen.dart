@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 
-/// Layar "Konfirmasi Pengambilan" untuk kapten (seller implant).
+/// Layar "Konfirmasi Pengambilan" untuk kapten (implant).
 ///
 /// Alur: kapten input muatan dulu (id_ritase NULL). Saat driver datang mengambil
 /// barang, kapten memilih trip (ritase) yang datang, mengisi BERAPA yang diambil
@@ -13,9 +13,9 @@ import '../services/api_client.dart';
 /// Boleh dikonfirmasi berkali-kali (ambil bertahap); sisa = input − akumulasi.
 /// Kolom "diambil" hanya menampilkan metrik yang sisanya > 0.
 class KaptenConfirmScreen extends StatefulWidget {
-  final String sellerName;
+  final String implantName;
 
-  const KaptenConfirmScreen({super.key, this.sellerName = ''});
+  const KaptenConfirmScreen({super.key, this.implantName = ''});
 
   @override
   State<KaptenConfirmScreen> createState() => _KaptenConfirmScreenState();
@@ -44,6 +44,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
   final Map<String, GlobalKey> _groupKeys = {};
 
   // Warna aksen per kategori (selaras layar input kapten).
+  // Urutan: AWB HV → Koli HV → Ecer HV, masing-masing JKT/SEG/BTN.
   static const _takenSections = [
     {
       'title': 'AWB',
@@ -70,19 +71,31 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         {'key': 'ecer_btn', 'label': 'BTN'},
       ],
     },
-    // Opsi A: HV digabung 1 field (nilai disimpan di jkt, seg/btn = 0).
+    {
+      'title': 'AWB High Value',
+      'color': 0xFFB91C1C,
+      'fields': [
+        {'key': 'awb_hv_jkt', 'label': 'JKT'},
+        {'key': 'awb_hv_seg', 'label': 'SEG'},
+        {'key': 'awb_hv_btn', 'label': 'BTN'},
+      ],
+    },
     {
       'title': 'Koli High Value',
       'color': 0xFFF59E0B,
       'fields': [
-        {'key': 'koli_hv_jkt', 'label': 'Jumlah'},
+        {'key': 'koli_hv_jkt', 'label': 'JKT'},
+        {'key': 'koli_hv_seg', 'label': 'SEG'},
+        {'key': 'koli_hv_btn', 'label': 'BTN'},
       ],
     },
     {
-      'title': 'HV AWB',
+      'title': 'Ecer High Value',
       'color': 0xFFEA580C,
       'fields': [
-        {'key': 'ecer_hv_jkt', 'label': 'Jumlah'},
+        {'key': 'ecer_hv_jkt', 'label': 'JKT'},
+        {'key': 'ecer_hv_seg', 'label': 'SEG'},
+        {'key': 'ecer_hv_btn', 'label': 'BTN'},
       ],
     },
   ];
@@ -140,29 +153,19 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     final sisa = _sisaEntry(jenis, ritKe);
     if (sisa != null) {
       final sKey = metricKey == 'jumlah_awb' ? 'sisa_jumlah_awb' : 'sisa_$metricKey';
-      // HV gabungan: alias baru bila ada, fallback jumlah legacy jkt+seg+btn
-      // agar data lama sebelum dihapus tetap tampil sebagai total.
-      // Bila tidak ada key HV sama sekali, lanjut ke fallback pending di bawah.
-      if (metricKey == 'koli_hv_jkt') {
-        const keys = ['sisa_koli_hv', 'sisa_koli_hv_jkt', 'sisa_koli_hv_seg', 'sisa_koli_hv_btn'];
-        if (keys.any(sisa.containsKey)) {
-          final alias = _toInt(sisa['sisa_koli_hv']);
-          if (alias > 0) return _clamp0(alias);
-          return _clamp0(_toInt(sisa['sisa_koli_hv_jkt']) +
-              _toInt(sisa['sisa_koli_hv_seg']) +
-              _toInt(sisa['sisa_koli_hv_btn']));
-        }
-      } else if (metricKey == 'ecer_hv_jkt') {
-        const keys = ['sisa_hv_awb', 'sisa_ecer_hv', 'sisa_ecer_hv_jkt', 'sisa_ecer_hv_seg', 'sisa_ecer_hv_btn'];
-        if (keys.any(sisa.containsKey)) {
-          final alias = _toInt(sisa['sisa_hv_awb']) + _toInt(sisa['sisa_ecer_hv']);
-          if (alias > 0) return _clamp0(alias);
-          return _clamp0(_toInt(sisa['sisa_ecer_hv_jkt']) +
-              _toInt(sisa['sisa_ecer_hv_seg']) +
-              _toInt(sisa['sisa_ecer_hv_btn']));
-        }
-      } else if (sisa.containsKey(sKey)) {
+      if (sisa.containsKey(sKey)) {
         return _clamp0(_toInt(sisa[sKey]));
+      }
+      // Fallback alias lama (data dari backend lama): jumlahkan agar tampil.
+      if (metricKey == 'awb_hv_jkt' && sisa.containsKey('sisa_awb_hv')) {
+        return _clamp0(_toInt(sisa['sisa_awb_hv']));
+      }
+      if (metricKey == 'koli_hv_jkt' && sisa.containsKey('sisa_koli_hv')) {
+        return _clamp0(_toInt(sisa['sisa_koli_hv']));
+      }
+      if (metricKey == 'ecer_hv_jkt' &&
+          (sisa.containsKey('sisa_hv_awb') || sisa.containsKey('sisa_ecer_hv'))) {
+        return _clamp0(_toInt(sisa['sisa_hv_awb']) + _toInt(sisa['sisa_ecer_hv']));
       }
     }
     final pending = _pendingEntry(jenis, ritKe);
@@ -382,7 +385,7 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
           fotoUrl = await ApiClient.uploadManifestPhoto(
             idRitase: 0,
             filePath: fotoPath,
-            namaLokasi: widget.sellerName,
+            namaLokasi: widget.implantName,
           );
         } finally {
           if (mounted) setState(() => _uploadingFoto.remove(key));
@@ -400,13 +403,15 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         ecerJkt: _takenInt(key, 'ecer_jkt'),
         ecerSeg: _takenInt(key, 'ecer_seg'),
         ecerBtn: _takenInt(key, 'ecer_btn'),
-        // HV gabungan: nilai disimpan di jkt, seg/btn = 0.
+        awbHvJkt: _takenInt(key, 'awb_hv_jkt'),
+        awbHvSeg: _takenInt(key, 'awb_hv_seg'),
+        awbHvBtn: _takenInt(key, 'awb_hv_btn'),
         koliHvJkt: _takenInt(key, 'koli_hv_jkt'),
-        koliHvSeg: 0,
-        koliHvBtn: 0,
+        koliHvSeg: _takenInt(key, 'koli_hv_seg'),
+        koliHvBtn: _takenInt(key, 'koli_hv_btn'),
         ecerHvJkt: _takenInt(key, 'ecer_hv_jkt'),
-        ecerHvSeg: 0,
-        ecerHvBtn: 0,
+        ecerHvSeg: _takenInt(key, 'ecer_hv_seg'),
+        ecerHvBtn: _takenInt(key, 'ecer_hv_btn'),
         fotoPenjemputanUrl: fotoUrl,
         catatan: _catatanCtrls[key]?.text.trim(),
       );
@@ -519,9 +524,9 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
               'Konfirmasi Pengambilan',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            if (widget.sellerName.isNotEmpty)
+            if (widget.implantName.isNotEmpty)
               Text(
-                widget.sellerName,
+                widget.implantName,
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Colors.white70),
               ),
           ],

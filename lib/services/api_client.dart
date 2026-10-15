@@ -126,6 +126,7 @@ class ApiClient {
   static const String _keyDriverName = 'config_driver_name';
   static const String _keyUserRole = 'config_user_role';
   static const String _keySellerId = 'config_seller_id';
+  static const String _keyImplantId = 'config_implant_id';
   static const String _keyIdUser = 'config_id_user';
   static const String _keyUsername = 'config_username';
   static const String _keyPlatNomor = 'config_plat_nomor';
@@ -186,6 +187,7 @@ class ApiClient {
     await prefs.remove(_keyDriverName);
     await prefs.remove(_keyUserRole);
     await prefs.remove(_keySellerId);
+    await prefs.remove(_keyImplantId);
   }
 
   // ── Konfigurasi role user (driver/kapten) ──
@@ -207,9 +209,16 @@ class ApiClient {
   static Future<int> getSellerId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_keySellerId) ?? 0;
-    await prefs.remove(_keyIdUser);
-    await prefs.remove(_keyUsername);
-    await prefs.remove(_keyPlatNomor);
+  }
+
+  static Future<void> saveImplantId(int implantId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyImplantId, implantId);
+  }
+
+  static Future<int> getImplantId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_keyImplantId) ?? 0;
   }
 
   /// Catat kapan app dibuka (telemetry backend). Fire-and-forget, aman dipanggil
@@ -647,6 +656,22 @@ class ApiClient {
     return null;
   }
 
+  /// Ambil info implant kapten yang sedang login
+  static Future<Map<String, dynamic>?> fetchKaptenImplantInfo() async {
+    try {
+      final res = await dio.get('/kapten/implant-info');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+    } catch (e) {
+      print('❌ [KAPTEN] Gagal fetchImplantInfo: $e');
+    }
+    return null;
+  }
+
   /// Ambil data cargo hari ini untuk lokasi kapten (pre-fill form)
   static Future<Map<String, dynamic>?> fetchTodayCargo({int? idRitase, String? jenisRitase, int? ritaseKe}) async {
     try {
@@ -688,7 +713,7 @@ class ApiClient {
     }
   }
 
-  /// Kapten input data muatan (12 field + foto)
+  /// Kapten input data muatan (HV per-wilayah JKT/SEG/BTN: AWB HV + Koli HV + Ecer HV + foto)
   static Future<Map<String, dynamic>?> submitKaptenCargo({
     required int idRitase,
     required int idStop,
@@ -699,12 +724,24 @@ class ApiClient {
     required int ecerJkt, required int ecerSeg, required int ecerBtn,
     required int koliHvJkt, required int koliHvSeg, required int koliHvBtn,
     required int ecerHvJkt, required int ecerHvSeg, required int ecerHvBtn,
+    required int awbHvJkt, required int awbHvSeg, required int awbHvBtn,
+    int? koliHv,
+    int? hvAwb,
+    int? ecerHv,
+    int? awbHv,
     String? namaLokasi,
     double? latitude,
     double? longitude,
     String? fotoManifestUrl,
     String? catatan,
   }) async {
+    // HV dikirim per-wilayah apa adanya. Alias lama (Opsi A) hanya fallback
+    // bila ketiga region masih 0 — untuk kompatibilitas backend lama.
+    int resolveJkt(int alias, int alt, int jkt, int seg, int btn) =>
+        (jkt == 0 && seg == 0 && btn == 0) ? (alias > 0 ? alias : alt) : jkt;
+    final kHvJkt = resolveJkt(koliHv ?? 0, 0, koliHvJkt, koliHvSeg, koliHvBtn);
+    final eHvJkt = resolveJkt(hvAwb ?? 0, ecerHv ?? 0, ecerHvJkt, ecerHvSeg, ecerHvBtn);
+    final aHvJkt = resolveJkt(awbHv ?? 0, 0, awbHvJkt, awbHvSeg, awbHvBtn);
     try {
       final res = await dio.post('/kapten/cargo-input', data: {
         'id_ritase': idRitase,
@@ -719,6 +756,11 @@ class ApiClient {
         'ecer_jkt': ecerJkt, 'ecer_seg': ecerSeg, 'ecer_btn': ecerBtn,
         'koli_hv_jkt': koliHvJkt, 'koli_hv_seg': koliHvSeg, 'koli_hv_btn': koliHvBtn,
         'ecer_hv_jkt': ecerHvJkt, 'ecer_hv_seg': ecerHvSeg, 'ecer_hv_btn': ecerHvBtn,
+        'awb_hv_jkt': awbHvJkt, 'awb_hv_seg': awbHvSeg, 'awb_hv_btn': awbHvBtn,
+        'koli_hv': kHvJkt,
+        'hv_awb': eHvJkt,
+        'ecer_hv': eHvJkt,
+        'awb_hv': aHvJkt,
         'foto_manifest_url': fotoManifestUrl ?? '',
         'catatan': catatan ?? '',
       });
@@ -736,7 +778,7 @@ class ApiClient {
     }
   }
 
-  // ── KAPTEN MULTI-SELLER ──
+  // ── KAPTEN MULTI-SELLER (legacy, seller) ──
 
   /// Ambil daftar seller yang bisa diakses kapten
   static Future<List<Map<String, dynamic>>> getMySellers() async {
@@ -764,6 +806,49 @@ class ApiClient {
     try {
       final res = await dio.post('/kapten/select-seller', data: {
         'seller_id': sellerId,
+      });
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  // ── KAPTEN MULTI-IMPLANT ──
+
+  /// Ambil daftar implant yang bisa diakses kapten
+  static Future<List<Map<String, dynamic>>> getMyImplants() async {
+    try {
+      final res = await dio.get('/kapten/my-implants');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is Map) {
+          final data = body['data'];
+          if (data['implants'] is List) {
+            return List<Map<String, dynamic>>.from(data['implants']);
+          }
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Pilih implant → return token baru dengan implant_id yang dipilih
+  static Future<Map<String, dynamic>?> selectImplant(int implantId) async {
+    try {
+      final res = await dio.post('/kapten/select-implant', data: {
+        'implant_id': implantId,
       });
       if (res.statusCode == 200 && res.data != null) {
         final body = res.data;
@@ -812,9 +897,19 @@ class ApiClient {
     int ecerJkt = 0, int ecerSeg = 0, int ecerBtn = 0,
     int koliHvJkt = 0, int koliHvSeg = 0, int koliHvBtn = 0,
     int ecerHvJkt = 0, int ecerHvSeg = 0, int ecerHvBtn = 0,
+    int awbHvJkt = 0, int awbHvSeg = 0, int awbHvBtn = 0,
+    int? diambilKoliHv,
+    int? diambilHvAwb,
+    int? diambilEcerHv,
+    int? diambilAwbHv,
     String? fotoPenjemputanUrl,
     String? catatan,
   }) async {
+    int resolveJkt(int alias, int alt, int jkt, int seg, int btn) =>
+        (jkt == 0 && seg == 0 && btn == 0) ? (alias > 0 ? alias : alt) : jkt;
+    final kHvJkt = resolveJkt(diambilKoliHv ?? 0, 0, koliHvJkt, koliHvSeg, koliHvBtn);
+    final eHvJkt = resolveJkt(diambilHvAwb ?? 0, diambilEcerHv ?? 0, ecerHvJkt, ecerHvSeg, ecerHvBtn);
+    final aHvJkt = resolveJkt(diambilAwbHv ?? 0, 0, awbHvJkt, awbHvSeg, awbHvBtn);
     try {
       final res = await dio.post('/kapten/confirm-pickup', data: {
         'jenis_ritase': jenisRitase,
@@ -825,6 +920,11 @@ class ApiClient {
         'diambil_ecer_jkt': ecerJkt, 'diambil_ecer_seg': ecerSeg, 'diambil_ecer_btn': ecerBtn,
         'diambil_koli_hv_jkt': koliHvJkt, 'diambil_koli_hv_seg': koliHvSeg, 'diambil_koli_hv_btn': koliHvBtn,
         'diambil_ecer_hv_jkt': ecerHvJkt, 'diambil_ecer_hv_seg': ecerHvSeg, 'diambil_ecer_hv_btn': ecerHvBtn,
+        'diambil_awb_hv_jkt': awbHvJkt, 'diambil_awb_hv_seg': awbHvSeg, 'diambil_awb_hv_btn': awbHvBtn,
+        'diambil_koli_hv': kHvJkt,
+        'diambil_hv_awb': eHvJkt,
+        'diambil_ecer_hv': eHvJkt,
+        'diambil_awb_hv': aHvJkt,
         'foto_penjemputan_url': fotoPenjemputanUrl ?? '',
         'catatan': catatan ?? '',
       });

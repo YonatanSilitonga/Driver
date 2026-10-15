@@ -16,28 +16,30 @@ class KaptenHomeScreen extends StatefulWidget {
 
 class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   String _driverName = 'Kapten';
-  String _sellerName = '';
-  int _currentSellerId = 0;
-  List<Map<String, dynamic>> _sellers = [];
+  String _implantName = '';
+  int _currentImplantId = 0;
+  List<Map<String, dynamic>> _implants = [];
   bool _isLoading = true;
   bool _isSubmitting = false;
   bool _isSwitching = false;
   String? _error;
   String? _successMsg;
 
-  // Data sebelumnya (untuk info card)
+  // Data sebelumnya (untuk info card): AWB + Koli + Ecer per-wilayah,
+  // lalu HV per-wilayah JKT/SEG/BTN, 3 seksi berurutan:
+  // AWB HV (baru) → Koli HV → Ecer HV. Total tampilan = jkt + seg + btn
+  // agar data lama Opsi A (nilai di jkt, seg/btn = 0) tetap benar.
   int _prevAwb = 0;
   int _prevKoliJkt = 0, _prevKoliSeg = 0, _prevKoliBtn = 0;
   int _prevEcerJkt = 0, _prevEcerSeg = 0, _prevEcerBtn = 0;
-  // Opsi A: Koli HV + HV AWB (dulu Ecer HV) digabung jadi 1 field.
-  // Kolom DB lama (jkt/seg/btn) tetap ada; nilai baru disimpan di jkt, seg/btn = 0.
-  // Total tampilan = jkt + seg + btn agar data lama sebelum dihapus tetap benar.
-  int _prevKoliHv = 0;
-  int _prevHvAwb = 0;
+  int _prevAwbHvJkt = 0, _prevAwbHvSeg = 0, _prevAwbHvBtn = 0;
+  int _prevKoliHvJkt = 0, _prevKoliHvSeg = 0, _prevKoliHvBtn = 0;
+  int _prevEcerHvJkt = 0, _prevEcerHvSeg = 0, _prevEcerHvBtn = 0;
   bool _isOldData = false;
 
-  // Controllers — 9 input angka (mulai kosong, hint '0' sebagai placeholder).
+  // Controllers — input angka (mulai kosong, hint '0' sebagai placeholder).
   // Parser (_ctrl) membaca string kosong sebagai 0, jadi submit tetap aman.
+  // Urutan HV di layar: AWB HV → Koli HV → Ecer HV, masing-masing JKT/SEG/BTN.
   final _awbController = TextEditingController();
   final _koliJktController = TextEditingController();
   final _koliSegController = TextEditingController();
@@ -45,8 +47,15 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   final _ecerJktController = TextEditingController();
   final _ecerSegController = TextEditingController();
   final _ecerBtnController = TextEditingController();
-  final _koliHvController = TextEditingController();
-  final _hvAwbController = TextEditingController();
+  final _awbHvJktController = TextEditingController();
+  final _awbHvSegController = TextEditingController();
+  final _awbHvBtnController = TextEditingController();
+  final _koliHvJktController = TextEditingController();
+  final _koliHvSegController = TextEditingController();
+  final _koliHvBtnController = TextEditingController();
+  final _ecerHvJktController = TextEditingController();
+  final _ecerHvSegController = TextEditingController();
+  final _ecerHvBtnController = TextEditingController();
   String? _fotoPath;
   final _catatanController = TextEditingController();
 
@@ -64,21 +73,6 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
 
   int _toInt(dynamic v) => (v as num?)?.toInt() ?? 0;
 
-  /// Jumlah gabungan HV: alias baru (koli_hv / hv_awb) bila > 0,
-  /// fallback ke jumlah legacy jkt+seg+btn (data lama sebelum dihapus).
-  int _hvTotal(Map<String, dynamic> m, String alias, List<String> legacyKeys,
-      {List<String> altKeys = const []}) {
-    for (final k in [alias, ...altKeys]) {
-      final v = (m[k] as num?)?.toInt() ?? 0;
-      if (v > 0) return v;
-    }
-    var sum = 0;
-    for (final k in legacyKeys) {
-      sum += (m[k] as num?)?.toInt() ?? 0;
-    }
-    return sum;
-  }
-
   /// Entri sisa untuk Rit aktif (jenis selalu outgoing di layar ini).
   Map<String, dynamic>? _sisaRit() {
     for (final s in _sisaGrup) {
@@ -93,8 +87,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     _prevAwb = 0;
     _prevKoliJkt = 0; _prevKoliSeg = 0; _prevKoliBtn = 0;
     _prevEcerJkt = 0; _prevEcerSeg = 0; _prevEcerBtn = 0;
-    _prevKoliHv = 0;
-    _prevHvAwb = 0;
+    _prevAwbHvJkt = 0; _prevAwbHvSeg = 0; _prevAwbHvBtn = 0;
+    _prevKoliHvJkt = 0; _prevKoliHvSeg = 0; _prevKoliHvBtn = 0;
+    _prevEcerHvJkt = 0; _prevEcerHvSeg = 0; _prevEcerHvBtn = 0;
     _isOldData = false;
     _sisaGrup = [];
   }
@@ -102,8 +97,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   List<TextEditingController> get _allControllers => [
     _awbController, _koliJktController, _koliSegController, _koliBtnController,
     _ecerJktController, _ecerSegController, _ecerBtnController,
-    _koliHvController,
-    _hvAwbController,
+    _awbHvJktController, _awbHvSegController, _awbHvBtnController,
+    _koliHvJktController, _koliHvSegController, _koliHvBtnController,
+    _ecerHvJktController, _ecerHvSegController, _ecerHvBtnController,
     _catatanController,
   ];
 
@@ -158,21 +154,21 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
       final cfg = await ApiClient.loadDriverConfig();
       _driverName = cfg['driver_name'] ?? 'Kapten';
 
-      _currentSellerId = await ApiClient.getSellerId();
+      _currentImplantId = await ApiClient.getImplantId();
 
       final results = await Future.wait([
-        ApiClient.fetchKaptenSellerInfo(),
-        ApiClient.getMySellers(),
+        ApiClient.fetchKaptenImplantInfo(),
+        ApiClient.getMyImplants(),
         ApiClient.fetchPendingConfirmations(),
       ]);
 
-      final sellerInfo = results[0] as Map<String, dynamic>?;
-      if (sellerInfo != null) {
-        _sellerName = sellerInfo['nama_seller'] ?? '';
+      final implantInfo = results[0] as Map<String, dynamic>?;
+      if (implantInfo != null) {
+        _implantName = implantInfo['nama_implant'] ?? '';
       }
 
-      final sellers = results[1] as List<Map<String, dynamic>>;
-      _sellers = sellers;
+      final implants = results[1] as List<Map<String, dynamic>>;
+      _implants = implants;
 
       final pending = results[2] as List<Map<String, dynamic>>;
       _pendingCount = pending.length;
@@ -219,11 +215,16 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         _prevEcerJkt = (todayData['ecer_jkt'] as num?)?.toInt() ?? 0;
         _prevEcerSeg = (todayData['ecer_seg'] as num?)?.toInt() ?? 0;
         _prevEcerBtn = (todayData['ecer_btn'] as num?)?.toInt() ?? 0;
-        // Gabungan: pakai alias baru bila ada, fallback jumlah legacy jkt+seg+btn.
-        _prevKoliHv = _hvTotal(todayData, 'koli_hv',
-            ['koli_hv_jkt', 'koli_hv_seg', 'koli_hv_btn']);
-        _prevHvAwb = _hvTotal(todayData, 'hv_awb',
-            ['ecer_hv_jkt', 'ecer_hv_seg', 'ecer_hv_btn'], altKeys: const ['ecer_hv']);
+        // HV per-wilayah (data lama Opsi A: nilai di jkt, seg/btn = 0).
+        _prevAwbHvJkt = (todayData['awb_hv_jkt'] as num?)?.toInt() ?? 0;
+        _prevAwbHvSeg = (todayData['awb_hv_seg'] as num?)?.toInt() ?? 0;
+        _prevAwbHvBtn = (todayData['awb_hv_btn'] as num?)?.toInt() ?? 0;
+        _prevKoliHvJkt = (todayData['koli_hv_jkt'] as num?)?.toInt() ?? 0;
+        _prevKoliHvSeg = (todayData['koli_hv_seg'] as num?)?.toInt() ?? 0;
+        _prevKoliHvBtn = (todayData['koli_hv_btn'] as num?)?.toInt() ?? 0;
+        _prevEcerHvJkt = (todayData['ecer_hv_jkt'] as num?)?.toInt() ?? 0;
+        _prevEcerHvSeg = (todayData['ecer_hv_seg'] as num?)?.toInt() ?? 0;
+        _prevEcerHvBtn = (todayData['ecer_hv_btn'] as num?)?.toInt() ?? 0;
         _isOldData = todayData['is_ada_data'] == true;
       }
       _sisaGrup = sisaGrup;
@@ -247,8 +248,8 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     return _fotoPath != null;
   }
 
-  void _showSellerPicker() {
-    if (_sellers.length <= 1) return;
+  void _showImplantPicker() {
+    if (_implants.length <= 1) return;
 
     showModalBottomSheet(
       context: context,
@@ -274,11 +275,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
               ),
               const SizedBox(height: 8),
-              ..._sellers.map((s) {
-                final id = s['id_seller'] as int? ?? 0;
-                final name = s['nama_seller'] ?? '-';
-                final kode = s['kode_seller'] ?? '';
-                final isActive = id == _currentSellerId;
+              ..._implants.map((s) {
+                final id = s['id_implant'] as int? ?? 0;
+                final name = s['nama_implant'] ?? '-';
+                final kode = s['kode_implant'] ?? '';
+                final isActive = id == _currentImplantId;
                 return ListTile(
                   leading: Icon(
                     Icons.store_rounded,
@@ -291,7 +292,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                       : null,
                   onTap: () {
                     Navigator.pop(ctx);
-                    if (!isActive) _switchSeller(id);
+                    if (!isActive) _switchImplant(id);
                   },
                 );
               }),
@@ -303,7 +304,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     );
   }
 
-  Future<void> _switchSeller(int newSellerId) async {
+  Future<void> _switchImplant(int newImplantId) async {
     if (_hasUnsavedData()) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -326,12 +327,12 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     setState(() => _isSwitching = true);
 
     try {
-      final result = await ApiClient.selectSeller(newSellerId);
+      final result = await ApiClient.selectImplant(newImplantId);
       if (result != null && mounted) {
         final token = result['token'] as String?;
         if (token != null && token.isNotEmpty) {
           await ApiClient.saveToken(token);
-          await ApiClient.saveSellerId(newSellerId);
+          await ApiClient.saveImplantId(newImplantId);
 
           for (final c in _allControllers) {
             c.text = '';
@@ -342,9 +343,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
 
           if (mounted) {
             setState(() {
-              _currentSellerId = newSellerId;
+              _currentImplantId = newImplantId;
               _isSwitching = false;
-              // Pesan sukses/error milik seller lama ikut dibersihkan.
+              // Pesan sukses/error milik implant lama ikut dibersihkan.
               _successMsg = null;
               _error = null;
             });
@@ -400,12 +401,21 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     final ecerJkt = _ctrl(_ecerJktController);
     final ecerSeg = _ctrl(_ecerSegController);
     final ecerBtn = _ctrl(_ecerBtnController);
-    final koliHv = _ctrl(_koliHvController);
-    final hvAwb = _ctrl(_hvAwbController);
+    final awbHvJkt = _ctrl(_awbHvJktController);
+    final awbHvSeg = _ctrl(_awbHvSegController);
+    final awbHvBtn = _ctrl(_awbHvBtnController);
+    final koliHvJkt = _ctrl(_koliHvJktController);
+    final koliHvSeg = _ctrl(_koliHvSegController);
+    final koliHvBtn = _ctrl(_koliHvBtnController);
+    final ecerHvJkt = _ctrl(_ecerHvJktController);
+    final ecerHvSeg = _ctrl(_ecerHvSegController);
+    final ecerHvBtn = _ctrl(_ecerHvBtnController);
 
     final totalInput = awb + koliJkt + koliSeg + koliBtn +
         ecerJkt + ecerSeg + ecerBtn +
-        koliHv + hvAwb;
+        awbHvJkt + awbHvSeg + awbHvBtn +
+        koliHvJkt + koliHvSeg + koliHvBtn +
+        ecerHvJkt + ecerHvSeg + ecerHvBtn;
 
     if (totalInput == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -453,7 +463,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         fotoUrl = await ApiClient.uploadManifestPhoto(
           idRitase: 0,
           filePath: _fotoPath!,
-          namaLokasi: _sellerName,
+          namaLokasi: _implantName,
         );
       }
 
@@ -465,9 +475,10 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         jumlahAwb: awb,
         koliJkt: koliJkt, koliSeg: koliSeg, koliBtn: koliBtn,
         ecerJkt: ecerJkt, ecerSeg: ecerSeg, ecerBtn: ecerBtn,
-        koliHvJkt: koliHv, koliHvSeg: 0, koliHvBtn: 0,
-        ecerHvJkt: hvAwb, ecerHvSeg: 0, ecerHvBtn: 0,
-        namaLokasi: _sellerName,
+        awbHvJkt: awbHvJkt, awbHvSeg: awbHvSeg, awbHvBtn: awbHvBtn,
+        koliHvJkt: koliHvJkt, koliHvSeg: koliHvSeg, koliHvBtn: koliHvBtn,
+        ecerHvJkt: ecerHvJkt, ecerHvSeg: ecerHvSeg, ecerHvBtn: ecerHvBtn,
+        namaLokasi: _implantName,
         fotoManifestUrl: fotoUrl,
         catatan: _catatanController.text.trim(),
       );
@@ -513,8 +524,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   Future<void> _showSuccessDialog(bool isUpdated) async {
     final totalKoli = _prevKoliJkt + _prevKoliSeg + _prevKoliBtn;
     final totalEcer = _prevEcerJkt + _prevEcerSeg + _prevEcerBtn;
-    final totalKoliHv = _prevKoliHv;
-    final totalEcerHv = _prevHvAwb;
+    final totalAwbHv = _prevAwbHvJkt + _prevAwbHvSeg + _prevAwbHvBtn;
+    final totalKoliHv = _prevKoliHvJkt + _prevKoliHvSeg + _prevKoliHvBtn;
+    final totalEcerHv = _prevEcerHvJkt + _prevEcerHvSeg + _prevEcerHvBtn;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -543,9 +555,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_sellerName.isNotEmpty)
+            if (_implantName.isNotEmpty)
               Text(
-                '$_sellerName • Rit $_ritaseKe',
+                '$_implantName • Rit $_ritaseKe',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF475569), fontWeight: FontWeight.w600),
               ),
             const SizedBox(height: 8),
@@ -561,8 +573,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 _buildInfoChip('$_prevAwb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
                 _buildInfoChip('$totalKoli Koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
                 _buildInfoChip('$totalEcer Ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
+                _buildInfoChip('$totalAwbHv AWB HV', const Color(0xFFFDE7E7), const Color(0xFFB91C1C)),
                 _buildInfoChip('$totalKoliHv Koli HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
-                _buildInfoChip('$totalEcerHv HV AWB', const Color(0xFFFFE7E7), const Color(0xFFC2410C)),
+                _buildInfoChip('$totalEcerHv Ecer HV', const Color(0xFFFFE7E7), const Color(0xFFC2410C)),
               ],
             ),
           ],
@@ -673,9 +686,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
               'Kapten: $_driverName',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            if (_sellerName.isNotEmpty)
+            if (_implantName.isNotEmpty)
               Text(
-                _sellerName,
+                _implantName,
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Colors.white70),
               ),
           ],
@@ -691,7 +704,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => KaptenConfirmScreen(sellerName: _sellerName),
+                      builder: (_) => KaptenConfirmScreen(implantName: _implantName),
                     ),
                   ).then((_) {
                     // Konfirmasi mengubah sisa → refresh badge + data Rit.
@@ -736,9 +749,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Seller info card — tappable dropdown
-                  if (_sellerName.isNotEmpty)
+                  if (_implantName.isNotEmpty)
                     GestureDetector(
-                      onTap: _sellers.length > 1 ? _showSellerPicker : null,
+                      onTap: _implants.length > 1 ? _showImplantPicker : null,
                       child: Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
@@ -777,7 +790,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          _sellerName,
+                                          _implantName,
                                           style: const TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.bold,
@@ -796,7 +809,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                                       ],
                                     ),
                                   ),
-                                  if (_sellers.length > 1)
+                                  if (_implants.length > 1)
                                     const Icon(Icons.unfold_more, color: Color(0xFF94A3B8), size: 20)
                                   else
                                     Container(
@@ -966,7 +979,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Isi data barang yang masuk ke seller ini',
+                          'Isi data barang yang masuk ke implant ini',
                           style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                         ),
                         const SizedBox(height: 16),
@@ -1025,22 +1038,31 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                   ]),
                   const SizedBox(height: 16),
 
-                  // === Section KOLI HV (gabungan, 1 field) ===
-                  _buildSectionHeader('Koli HV', Icons.star_outline, const Color(0xFFF59E0B)),
-                  _buildCompactInput(
-                    controller: _koliHvController,
-                    label: 'Jumlah Koli HV',
-                    color: const Color(0xFFF59E0B),
-                  ),
+                  // === Section AWB HV (baru, 3 wilayah) ===
+                  _buildSectionHeader('AWB HV', Icons.local_offer_outlined, const Color(0xFFB91C1C)),
+                  _buildRowInputs([
+                    _FieldDef(_awbHvJktController, 'JKT', const Color(0xFFB91C1C)),
+                    _FieldDef(_awbHvSegController, 'SEG', const Color(0xFFDC2626)),
+                    _FieldDef(_awbHvBtnController, 'BTN', const Color(0xFF991B1B)),
+                  ]),
                   const SizedBox(height: 16),
 
-                  // === Section HV AWB (dulu Ecer HV, gabungan 1 field) ===
-                  _buildSectionHeader('HV AWB', Icons.star_half_outlined, const Color(0xFFEA580C)),
-                  _buildCompactInput(
-                    controller: _hvAwbController,
-                    label: 'Jumlah HV AWB',
-                    color: const Color(0xFFEA580C),
-                  ),
+                  // === Section KOLI HV (3 wilayah) ===
+                  _buildSectionHeader('Koli HV', Icons.star_outline, const Color(0xFFF59E0B)),
+                  _buildRowInputs([
+                    _FieldDef(_koliHvJktController, 'JKT', const Color(0xFFF59E0B)),
+                    _FieldDef(_koliHvSegController, 'SEG', const Color(0xFFD97706)),
+                    _FieldDef(_koliHvBtnController, 'BTN', const Color(0xFFB45309)),
+                  ]),
+                  const SizedBox(height: 16),
+
+                  // === Section ECER HV (3 wilayah) ===
+                  _buildSectionHeader('Ecer HV', Icons.star_half_outlined, const Color(0xFFEA580C)),
+                  _buildRowInputs([
+                    _FieldDef(_ecerHvJktController, 'JKT', const Color(0xFFEA580C)),
+                    _FieldDef(_ecerHvSegController, 'SEG', const Color(0xFFC2410C)),
+                    _FieldDef(_ecerHvBtnController, 'BTN', const Color(0xFF9A3412)),
+                  ]),
                   const SizedBox(height: 16),
 
                   // Foto section
@@ -1178,25 +1200,6 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     final s = _sisaRit();
     int v(String? sisaKey, int fallback) =>
         s != null ? _toInt(s[sisaKey]) : fallback;
-    // HV gabungan: jumlahkan sisa legacy agar data lama tetap tampil sebagai total.
-    int hv(String alias, List<String> legacy, int fallback, {List<String> alt = const []}) {
-      if (s == null) return fallback;
-      for (final k in [alias, ...alt]) {
-        if (s.containsKey(k)) {
-          final vv = _toInt(s[k]);
-          if (vv > 0) return vv;
-        }
-      }
-      var sum = 0;
-      var found = false;
-      for (final k in legacy) {
-        if (s.containsKey(k)) {
-          found = true;
-          sum += _toInt(s[k]);
-        }
-      }
-      return found ? sum : fallback;
-    }
     return {
       'jumlah_awb': v('sisa_jumlah_awb', _prevAwb),
       'koli_jkt': v('sisa_koli_jkt', _prevKoliJkt),
@@ -1205,9 +1208,15 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
       'ecer_jkt': v('sisa_ecer_jkt', _prevEcerJkt),
       'ecer_seg': v('sisa_ecer_seg', _prevEcerSeg),
       'ecer_btn': v('sisa_ecer_btn', _prevEcerBtn),
-      'koli_hv': hv('sisa_koli_hv', const ['sisa_koli_hv_jkt', 'sisa_koli_hv_seg', 'sisa_koli_hv_btn'], _prevKoliHv),
-      'hv_awb': hv('sisa_hv_awb', const ['sisa_ecer_hv_jkt', 'sisa_ecer_hv_seg', 'sisa_ecer_hv_btn'], _prevHvAwb,
-          alt: const ['sisa_ecer_hv']),
+      'awb_hv_jkt': v('sisa_awb_hv_jkt', _prevAwbHvJkt),
+      'awb_hv_seg': v('sisa_awb_hv_seg', _prevAwbHvSeg),
+      'awb_hv_btn': v('sisa_awb_hv_btn', _prevAwbHvBtn),
+      'koli_hv_jkt': v('sisa_koli_hv_jkt', _prevKoliHvJkt),
+      'koli_hv_seg': v('sisa_koli_hv_seg', _prevKoliHvSeg),
+      'koli_hv_btn': v('sisa_koli_hv_btn', _prevKoliHvBtn),
+      'ecer_hv_jkt': v('sisa_ecer_hv_jkt', _prevEcerHvJkt),
+      'ecer_hv_seg': v('sisa_ecer_hv_seg', _prevEcerHvSeg),
+      'ecer_hv_btn': v('sisa_ecer_hv_btn', _prevEcerHvBtn),
     };
   }
 
@@ -1216,10 +1225,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     final awb = d['jumlah_awb']!;
     final totalKoli = d['koli_jkt']! + d['koli_seg']! + d['koli_btn']!;
     final totalEcer = d['ecer_jkt']! + d['ecer_seg']! + d['ecer_btn']!;
-    final totalKoliHv = d['koli_hv']!;
-    final totalEcerHv = d['hv_awb']!;
+    final totalAwbHv = d['awb_hv_jkt']! + d['awb_hv_seg']! + d['awb_hv_btn']!;
+    final totalKoliHv = d['koli_hv_jkt']! + d['koli_hv_seg']! + d['koli_hv_btn']!;
+    final totalEcerHv = d['ecer_hv_jkt']! + d['ecer_hv_seg']! + d['ecer_hv_btn']!;
     final allZero = awb == 0 && totalKoli == 0 && totalEcer == 0 &&
-        totalKoliHv == 0 && totalEcerHv == 0;
+        totalAwbHv == 0 && totalKoliHv == 0 && totalEcerHv == 0;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -1272,8 +1282,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
               if (awb > 0) _buildInfoChip('$awb AWB', Color(0xFFEDE9FE), Color(0xFF6D28D9)),
               if (totalKoli > 0) _buildInfoChip('$totalKoli Koli', Color(0xFFDBEAFE), Color(0xFF1E40AF)),
               if (totalEcer > 0) _buildInfoChip('$totalEcer Ecer', Color(0xFFFEF9C3), Color(0xFF854D0E)),
+              if (totalAwbHv > 0) _buildInfoChip('$totalAwbHv AWB HV', Color(0xFFFDE7E7), Color(0xFFB91C1C)),
               if (totalKoliHv > 0) _buildInfoChip('$totalKoliHv Koli HV', Color(0xFFFEF3C7), Color(0xFFB45309)),
-              if (totalEcerHv > 0) _buildInfoChip('$totalEcerHv HV AWB', Color(0xFFFFE7E7), Color(0xFFC2410C)),
+              if (totalEcerHv > 0) _buildInfoChip('$totalEcerHv Ecer HV', Color(0xFFFFE7E7), Color(0xFFC2410C)),
             ],
           ),
           const SizedBox(height: 6),
@@ -1312,14 +1323,19 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         'regions': [d['ecer_jkt']!, d['ecer_seg']!, d['ecer_btn']!],
       },
       {
-        'title': 'Koli HV',
-        'total': d['koli_hv']!,
-        'regions': <int>[],
+        'title': 'AWB HV',
+        'total': d['awb_hv_jkt']! + d['awb_hv_seg']! + d['awb_hv_btn']!,
+        'regions': [d['awb_hv_jkt']!, d['awb_hv_seg']!, d['awb_hv_btn']!],
       },
       {
-        'title': 'HV AWB',
-        'total': d['hv_awb']!,
-        'regions': <int>[],
+        'title': 'Koli HV',
+        'total': d['koli_hv_jkt']! + d['koli_hv_seg']! + d['koli_hv_btn']!,
+        'regions': [d['koli_hv_jkt']!, d['koli_hv_seg']!, d['koli_hv_btn']!],
+      },
+      {
+        'title': 'Ecer HV',
+        'total': d['ecer_hv_jkt']! + d['ecer_hv_seg']! + d['ecer_hv_btn']!,
+        'regions': [d['ecer_hv_jkt']!, d['ecer_hv_seg']!, d['ecer_hv_btn']!],
       },
     ];
     final hasData = rows.any((row) => (row['total'] as int) > 0);
@@ -1337,9 +1353,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
               'Rincian Data Saat Ini',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
             ),
-            if (_sellerName.isNotEmpty)
+            if (_implantName.isNotEmpty)
               Text(
-                '$_sellerName • Rit $_ritaseKe',
+                '$_implantName • Rit $_ritaseKe',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
               ),
           ],

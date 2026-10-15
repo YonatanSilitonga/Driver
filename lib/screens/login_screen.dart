@@ -7,7 +7,7 @@ import '../services/background_tracking.dart';
 import '../services/app_updater.dart';
 import '../utils/network_exception.dart';
 import 'home_screen.dart';
-import 'seller_selection_screen.dart';
+import 'implant_selection_screen.dart';
 import 'pickup/pickup_home_screen.dart';
 import 'forgot_password_screen.dart';
 import 'permission_guide_screen.dart';
@@ -143,10 +143,16 @@ class _LoginScreenState extends State<LoginScreen> {
             final role = (user['role'] ?? 'driver').toString();
             await ApiClient.saveUserRole(role);
 
-            // Simpan seller_id jika ada (untuk kapten)
+            // Simpan seller_id jika ada (untuk kapten, legacy)
             final sellerId = _toInt(user['id_seller'], fallback: 0);
             if (sellerId > 0) {
               await ApiClient.saveSellerId(sellerId);
+            }
+
+            // Simpan implant_id jika ada (untuk kapten)
+            final implantId = _toInt(user['id_implant'], fallback: 0);
+            if (implantId > 0) {
+              await ApiClient.saveImplantId(implantId);
             }
           } catch (e) {
             // ignore: avoid_print
@@ -204,7 +210,7 @@ final isDriverPickup = userRole == 'driver_pickup' || role == 'driver_pickup';
 final isKapten = userRole == 'kapten' || role == 'kapten';
 final destinationWidget = isDriverPickup
     ? const PickupHomeScreen()
-    : (isKapten ? const SellerSelectionScreen() : const HomeScreen());
+    : (isKapten ? const ImplantSelectionScreen() : const HomeScreen());
 
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
