@@ -221,7 +221,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _stopwatchTimer;
   Timer? _watchdogTimer;
   Timer? _routePollingTimer;
-  int _activeStageSeconds = 0;
+  final ValueNotifier<int> _activeStageSecondsNotifier = ValueNotifier<int>(0);
+  int get _activeStageSeconds => _activeStageSecondsNotifier.value;
+  set _activeStageSeconds(int val) => _activeStageSecondsNotifier.value = val;
 
   /// Baseline stage aktif dari server (created_at event status terakhir).
   /// Dipakai supaya durasi stage gak reset ke 0 tiap app dibuka lagi.
@@ -290,7 +292,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _startRoutePollingTimer() {
     _routePollingTimer?.cancel();
-    _routePollingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+    _routePollingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (!mounted) return;
       _fetchActiveRitase(isSilentCheck: true);
     });
@@ -747,6 +749,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _stopwatchTimer?.cancel();
     _watchdogTimer?.cancel();
     _routePollingTimer?.cancel();
+    _activeStageSecondsNotifier.dispose();
     for (final c in _cardControllers) {
       c?.dispose();
     }
@@ -783,63 +786,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _stopwatchTimer?.cancel();
     _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) return;
-      setState(() {
-        if (_isTripStarted && !_isEntireRouteCompleted) {
-          _activeStageSeconds++;
+      if (_isTripStarted && !_isEntireRouteCompleted) {
+        _activeStageSeconds++;
 
-          _gpsTick++;
-          if (_gpsTick % _gpsRefreshEveryTicks == 0) {
-            _refreshLocation();
-          }
+        _gpsTick++;
+        if (_gpsTick % _gpsRefreshEveryTicks == 0) {
+          _refreshLocation();
+        }
 
-          final now = DateTime.now();
-          if (_lastSentTime == null ||
-              _lastSentLat == null ||
-              _lastSentLng == null) {
-            _sendInstantTracking();
+        final now = DateTime.now();
+        if (_lastSentTime == null ||
+            _lastSentLat == null ||
+            _lastSentLng == null) {
+          _sendInstantTracking();
+        } else {
+          final latDiff = (_latitude - _lastSentLat!).abs();
+          final lngDiff = (_longitude - _lastSentLng!).abs();
+          final moved =
+              _currentSpeedKmH > _speedThresholdKmh ||
+              (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
+
+          if (moved) {
+            final secSince = now.difference(_lastSentTime!).inSeconds;
+            if (secSince >= _movingSendSeconds) {
+              _sendInstantTracking(speed: _currentSpeedKmH);
+            }
           } else {
-            final latDiff = (_latitude - _lastSentLat!).abs();
-            final lngDiff = (_longitude - _lastSentLng!).abs();
-            final moved =
-                _currentSpeedKmH > _speedThresholdKmh ||
-                (latDiff > _moveThresholdDeg || lngDiff > _moveThresholdDeg);
-
-            if (moved) {
-              final secSince = now.difference(_lastSentTime!).inSeconds;
-              if (secSince >= _movingSendSeconds) {
-                _sendInstantTracking(speed: _currentSpeedKmH);
-              }
-            } else {
-              final secSince = now.difference(_lastSentTime!).inSeconds;
-              if (secSince >= _stationarySendSeconds) {
-                _lastSentLat = _latitude;
-                _lastSentLng = _longitude;
-                _lastSentTime = now;
-                String? locName = _currentSeller?.name;
-                if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
-                  if (_allSellers.isNotEmpty &&
-                      _completedStops.length + 1 < _allSellers.length) {
-                    locName = _allSellers[_completedStops.length + 1].name;
-                  }
-                } else if (_currentStage == TripStage.completed) {
-                  locName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
+            final secSince = now.difference(_lastSentTime!).inSeconds;
+            if (secSince >= _stationarySendSeconds) {
+              _lastSentLat = _latitude;
+              _lastSentLng = _longitude;
+              _lastSentTime = now;
+              String? locName = _currentSeller?.name;
+              if (_currentStage == TripStage.enRoute || _currentStage == TripStage.arrived) {
+                if (_allSellers.isNotEmpty &&
+                    _completedStops.length + 1 < _allSellers.length) {
+                  locName = _allSellers[_completedStops.length + 1].name;
                 }
-                ApiClient.sendTrackingData(
-                  latitude: _latitude,
-                  longitude: _longitude,
-                  speed: 0,
-                  status: '$_currentStageTitle (Hemat Baterai)',
-                  koli: _currentActualKoli,
-                  idDriver: _idDriver,
-                  idKendaraan: _idKendaraan,
-                  idRitase: _idRitase,
-                  namaLokasi: locName,
-                );
+              } else if (_currentStage == TripStage.completed) {
+                locName = _allSellers.isNotEmpty ? _allSellers.last.name : 'Selesai';
               }
+              ApiClient.sendTrackingData(
+                latitude: _latitude,
+                longitude: _longitude,
+                speed: 0,
+                status: '$_currentStageTitle (Hemat Baterai)',
+                koli: _currentActualKoli,
+                idDriver: _idDriver,
+                idKendaraan: _idKendaraan,
+                idRitase: _idRitase,
+                namaLokasi: locName,
+              );
             }
           }
         }
-      });
+      }
     });
   }
 
@@ -1641,21 +1642,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ],
                     ),
                   ),
-                  // Truck illustration
-                  if (!_isTripStarted)
-                    Image.asset(
-                      'assets/images/truck_illustration.png',
-                      width: 100,
-                      height: 60,
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stack) {
-                        return Icon(
-                          Icons.local_shipping_rounded,
-                          size: 48,
-                          color: Colors.white.withValues(alpha: 0.3),
-                        );
-                      },
-                    ),
                   // Settings menu
                   PopupMenuButton<String>(
                     icon: Icon(
@@ -2421,14 +2407,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         color: AppColors.navy,
                       ),
                       const SizedBox(width: 4),
-                      Text(
-                        _formatDuration(_activeStageSeconds),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 11,
-                          color: AppColors.navy,
-                          fontFamily: 'monospace',
-                        ),
+                      ValueListenableBuilder<int>(
+                        valueListenable: _activeStageSecondsNotifier,
+                        builder: (context, seconds, _) {
+                          return Text(
+                            _formatDuration(seconds),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                              color: AppColors.navy,
+                              fontFamily: 'monospace',
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),

@@ -818,7 +818,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                     borderRadius: BorderRadius.circular(8),
                     child: Image.file(
                       File(fotoPath),
-                      width: 56, height: 56, fit: BoxFit.cover,
+                      width: 56,
+                      height: 56,
+                      cacheWidth: 150,
+                      fit: BoxFit.cover,
                     ),
                   ),
                 ],

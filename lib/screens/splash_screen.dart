@@ -94,7 +94,7 @@ class _SplashScreenState extends State<SplashScreen>
       final hasToken = await ApiClient.isLoggedIn();
       if (hasToken) {
         try {
-          final user = await AuthService.me();
+          final user = await AuthService.me().timeout(const Duration(seconds: 3));
           if (user != null) {
 
             // Route berdasarkan role
