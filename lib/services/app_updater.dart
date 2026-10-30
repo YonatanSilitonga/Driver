@@ -1,16 +1,45 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config/app_config.dart';
 import 'api_client.dart';
 
 class AppUpdater {
   static bool _isDialogShowing = false;
 
   /// Versi aplikasi saat ini.
-  /// WAJIB diubah setiap kali rilis versi baru (sama dengan VersionName di handlers.go).
+  /// Checklist rilis versi baru:
+  /// 1. Samakan dengan `version:` di pubspec.yaml dan VersionName di handlers.go
+  ///    (atau APP_VERSION_NAME di env backend).
+  /// 2. Naikkan build number pubspec (+N) dan VersionCode backend.
   static const String currentAppVersion = "1.2.2";
 
   /// Cek versi aplikasi ke server & tampilkan dialog jika versi server beda.
-  static Future<void> checkUpdate(BuildContext context, {bool isManual = false}) async {
+  /// Build debug dan build non-production selalu dilewati: dialog force-update
+  /// production tidak boleh mengganggu testing lokal.
+  static Future<void> checkUpdate(
+    BuildContext context, {
+    bool isManual = false,
+  }) async {
+    if (kDebugMode || !AppConfig.isProduction) {
+      // ignore: avoid_print
+      print(
+        '[APP UPDATER] Mode development: pemeriksaan update dilewati '
+        '(v$currentAppVersion).',
+      );
+      if (isManual && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Mode development (v$currentAppVersion): '
+              'pemeriksaan update dilewati.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     if (isManual) {
       _isDialogShowing = false; // Reset lock saat cek manual
     }
@@ -25,7 +54,10 @@ class AppUpdater {
               SizedBox(
                 width: 16,
                 height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
               ),
               SizedBox(width: 12),
               Text('Memeriksa pembaruan aplikasi...'),
@@ -43,7 +75,9 @@ class AppUpdater {
         if (isManual) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Gagal memeriksa pembaruan. Periksa koneksi internet.'),
+              content: Text(
+                'Gagal memeriksa pembaruan. Periksa koneksi internet.',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -55,14 +89,20 @@ class AppUpdater {
 
       // Perbandingan teks versi langsung (100% bebas bug split-per-abi):
       // Jika versi server BEDA dengan versi di kode ini -> Tampilkan dialog update
-      final isUpdateAvailable = serverVersionName.isNotEmpty && serverVersionName != currentAppVersion;
+      final isUpdateAvailable =
+          serverVersionName.isNotEmpty &&
+          serverVersionName != currentAppVersion;
 
       // ignore: avoid_print
-      print('🔄 [APP UPDATER] App: v$currentAppVersion vs Server: v$serverVersionName (Update? $isUpdateAvailable)');
+      print(
+        '[APP UPDATER] App: v$currentAppVersion vs Server: '
+        'v$serverVersionName (Update? $isUpdateAvailable)',
+      );
 
       if (isUpdateAvailable) {
         final downloadUrl = info['download_url']?.toString() ?? '';
-        final releaseNotes = info['release_notes']?.toString() ??
+        final releaseNotes =
+            info['release_notes']?.toString() ??
             'Pembaruan performa & fitur baru tersedia.';
         final forceUpdate = info['force_update'] == true;
 
@@ -81,12 +121,19 @@ class AppUpdater {
                 ),
                 title: const Row(
                   children: [
-                    Icon(Icons.system_update_rounded, color: Color(0xFF0D47A1), size: 28),
+                    Icon(
+                      Icons.system_update_rounded,
+                      color: Color(0xFF0D47A1),
+                      size: 28,
+                    ),
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         'Pembaruan Aplikasi',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
                       ),
                     ),
                   ],
@@ -106,7 +153,11 @@ class AppUpdater {
                     const SizedBox(height: 8),
                     Text(
                       releaseNotes,
-                      style: TextStyle(color: Colors.grey[800], fontSize: 13, height: 1.4),
+                      style: TextStyle(
+                        color: Colors.grey[800],
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
                     ),
                   ],
                 ),
@@ -114,20 +165,33 @@ class AppUpdater {
                   if (!forceUpdate)
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Nanti', style: TextStyle(color: Colors.grey)),
+                      child: const Text(
+                        'Nanti',
+                        style: TextStyle(color: Colors.grey),
+                      ),
                     ),
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF0D47A1),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
                     ),
-                    icon: const Icon(Icons.download_rounded, color: Colors.white, size: 18),
+                    icon: const Icon(
+                      Icons.download_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
                     label: const Text(
                       'Perbarui Sekarang',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     onPressed: () async {
                       if (downloadUrl.isNotEmpty) {
@@ -136,11 +200,16 @@ class AppUpdater {
                         }
                         try {
                           final uri = Uri.parse(downloadUrl);
-                          await launchUrl(uri, mode: LaunchMode.externalApplication);
+                          await launchUrl(
+                            uri,
+                            mode: LaunchMode.externalApplication,
+                          );
                         } catch (e) {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Gagal membuka link unduhan: $e')),
+                              SnackBar(
+                                content: Text('Gagal membuka link unduhan: $e'),
+                              ),
                             );
                           }
                         }

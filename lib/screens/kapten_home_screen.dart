@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import 'implant_selection_screen.dart';
 import 'kapten_confirm_screen.dart';
 import 'login_screen.dart';
 
@@ -17,6 +18,7 @@ class KaptenHomeScreen extends StatefulWidget {
 class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   String _driverName = 'Kapten';
   String _implantName = '';
+  String _titikName = '';
   int _currentImplantId = 0;
   List<Map<String, dynamic>> _implants = [];
   bool _isLoading = true;
@@ -24,6 +26,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   bool _isSwitching = false;
   String? _error;
   String? _successMsg;
+
+  /// Cegah percobaan refresh token (select-implant) berulang tanpa henti.
+  bool _tokenRefreshAttempted = false;
 
   // Data sebelumnya (untuk info card): AWB + Koli + Ecer per-wilayah,
   // lalu HV per-wilayah JKT/SEG/BTN, 3 seksi berurutan:
@@ -76,7 +81,8 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   /// Entri sisa untuk Rit aktif (jenis selalu outgoing di layar ini).
   Map<String, dynamic>? _sisaRit() {
     for (final s in _sisaGrup) {
-      if ((s['jenis_ritase'] ?? '') == 'outgoing' && _toInt(s['ritase_ke']) == _ritaseKe) {
+      if ((s['jenis_ritase'] ?? '') == 'outgoing' &&
+          _toInt(s['ritase_ke']) == _ritaseKe) {
         return s;
       }
     }
@@ -85,21 +91,42 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
 
   void _zeroPrev() {
     _prevAwb = 0;
-    _prevKoliJkt = 0; _prevKoliSeg = 0; _prevKoliBtn = 0;
-    _prevEcerJkt = 0; _prevEcerSeg = 0; _prevEcerBtn = 0;
-    _prevAwbHvJkt = 0; _prevAwbHvSeg = 0; _prevAwbHvBtn = 0;
-    _prevKoliHvJkt = 0; _prevKoliHvSeg = 0; _prevKoliHvBtn = 0;
-    _prevEcerHvJkt = 0; _prevEcerHvSeg = 0; _prevEcerHvBtn = 0;
+    _prevKoliJkt = 0;
+    _prevKoliSeg = 0;
+    _prevKoliBtn = 0;
+    _prevEcerJkt = 0;
+    _prevEcerSeg = 0;
+    _prevEcerBtn = 0;
+    _prevAwbHvJkt = 0;
+    _prevAwbHvSeg = 0;
+    _prevAwbHvBtn = 0;
+    _prevKoliHvJkt = 0;
+    _prevKoliHvSeg = 0;
+    _prevKoliHvBtn = 0;
+    _prevEcerHvJkt = 0;
+    _prevEcerHvSeg = 0;
+    _prevEcerHvBtn = 0;
     _isOldData = false;
     _sisaGrup = [];
   }
 
   List<TextEditingController> get _allControllers => [
-    _awbController, _koliJktController, _koliSegController, _koliBtnController,
-    _ecerJktController, _ecerSegController, _ecerBtnController,
-    _awbHvJktController, _awbHvSegController, _awbHvBtnController,
-    _koliHvJktController, _koliHvSegController, _koliHvBtnController,
-    _ecerHvJktController, _ecerHvSegController, _ecerHvBtnController,
+    _awbController,
+    _koliJktController,
+    _koliSegController,
+    _koliBtnController,
+    _ecerJktController,
+    _ecerSegController,
+    _ecerBtnController,
+    _awbHvJktController,
+    _awbHvSegController,
+    _awbHvBtnController,
+    _koliHvJktController,
+    _koliHvSegController,
+    _koliHvBtnController,
+    _ecerHvJktController,
+    _ecerHvSegController,
+    _ecerHvBtnController,
     _catatanController,
   ];
 
@@ -153,36 +180,91 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     try {
       final cfg = await ApiClient.loadDriverConfig();
       _driverName = cfg['driver_name'] ?? 'Kapten';
-
       _currentImplantId = await ApiClient.getImplantId();
+    } catch (_) {}
 
-      final results = await Future.wait([
-        ApiClient.fetchKaptenImplantInfo(),
-        ApiClient.getMyImplants(),
-        ApiClient.fetchPendingConfirmations(),
-      ]);
+    // Panggil satu per satu: kegagalan satu endpoint (mis. token lama tanpa
+    // klaim implant) tidak boleh mengosongkan nama & daftar implant sekaligus.
+    Map<String, dynamic>? implantInfo;
+    List<Map<String, dynamic>> implants = [];
+    List<Map<String, dynamic>> pending = [];
+    try {
+      implantInfo = await ApiClient.fetchKaptenImplantInfo();
+    } catch (_) {}
+    try {
+      implants = await ApiClient.getMyImplants();
+    } catch (_) {}
+    try {
+      pending = await ApiClient.fetchPendingConfirmations();
+    } catch (_) {}
 
-      final implantInfo = results[0] as Map<String, dynamic>?;
-      if (implantInfo != null) {
-        _implantName = implantInfo['nama_implant'] ?? '';
+    _implants = implants;
+    _pendingCount = pending.length;
+
+    var name = (implantInfo?['nama_implant'] ?? '').toString();
+    if (name.isEmpty) {
+      for (final m in implants) {
+        if (_toInt(m['id_implant']) == _currentImplantId) {
+          name = (m['nama_implant'] ?? '').toString();
+          break;
+        }
       }
-
-      final implants = results[1] as List<Map<String, dynamic>>;
-      _implants = implants;
-
-      final pending = results[2] as List<Map<String, dynamic>>;
-      _pendingCount = pending.length;
-
-      await _fetchRitData();
-    } catch (e) {
-      // Ignore error for seller info
     }
+    if (name.isEmpty && implants.isNotEmpty) {
+      Map<String, dynamic>? utama;
+      for (final m in implants) {
+        if ((m['peran'] ?? 'utama') == 'utama') {
+          utama ??= m;
+        }
+      }
+      final pick = utama ?? implants.first;
+      name = (pick['nama_implant'] ?? '').toString();
+      if (_currentImplantId == 0) {
+        _currentImplantId = _toInt(pick['id_implant']);
+      }
+    }
+    _implantName = name;
+    _titikName = '';
+    for (final m in implants) {
+      if (_toInt(m['id_implant']) == _currentImplantId) {
+        _titikName = (m['nama_titik_implant'] ?? '').toString();
+        break;
+      }
+    }
+
+    // Token sesi lama mungkin belum memuat id_implant → implant-info 400.
+    // Mint token baru sekali dari implant yang tersimpan.
+    if (implantInfo == null &&
+        _currentImplantId > 0 &&
+        !_tokenRefreshAttempted) {
+      _tokenRefreshAttempted = true;
+      try {
+        final result = await ApiClient.selectImplant(_currentImplantId);
+        final token = result?['token'] as String?;
+        if (token != null && token.isNotEmpty) {
+          await ApiClient.saveToken(token);
+          await _loadInitialData();
+          return;
+        }
+      } catch (_) {}
+    }
+
+    await _fetchRitData();
 
     if (mounted) {
       setState(() {
         _isLoading = false;
       });
     }
+  }
+
+  /// Buka layar pemilihan implant (dipakai bila daftar belum termuat).
+  Future<void> _openImplantSelection() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const ImplantSelectionScreen()),
+    );
+    if (mounted) _loadInitialData();
   }
 
   /// Ambil data milik Rit aktif: total input (today-cargo) + sisa grup.
@@ -253,51 +335,92 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFCBD5E1),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Ganti Implant',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-              ),
-              const SizedBox(height: 8),
-              ..._implants.map((s) {
-                final id = s['id_implant'] as int? ?? 0;
-                final name = s['nama_implant'] ?? '-';
-                final kode = s['kode_implant'] ?? '';
-                final isActive = id == _currentImplantId;
-                return ListTile(
-                  leading: Icon(
-                    Icons.store_rounded,
-                    color: isActive ? const Color(0xFFFEA103) : const Color(0xFF94A3B8),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.8,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFCBD5E1),
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                  title: Text(name, style: TextStyle(fontWeight: isActive ? FontWeight.bold : FontWeight.w500)),
-                  subtitle: kode.isNotEmpty ? Text(kode, style: const TextStyle(fontSize: 12)) : null,
-                  trailing: isActive
-                      ? const Icon(Icons.check_circle, color: Color(0xFFFEA103))
-                      : null,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    if (!isActive) _switchImplant(id);
-                  },
-                );
-              }),
-              const SizedBox(height: 8),
-            ],
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Ganti Implant',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    children: [
+                      ..._implants.map((s) {
+                        final id = s['id_implant'] as int? ?? 0;
+                        final name = s['nama_implant'] ?? '-';
+                        final kode = s['kode_implant'] ?? '';
+                        final isActive = id == _currentImplantId;
+                        return ListTile(
+                          leading: Icon(
+                            Icons.store_rounded,
+                            color: isActive
+                                ? const Color(0xFFFEA103)
+                                : const Color(0xFF94A3B8),
+                          ),
+                          title: Text(
+                            name,
+                            style: TextStyle(
+                              fontWeight: isActive
+                                  ? FontWeight.bold
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                          subtitle: Text(
+                            [
+                              if (kode.isNotEmpty) kode,
+                              if ((s['nama_titik_implant'] ?? '')
+                                      .toString()
+                                      .isNotEmpty &&
+                                  s['nama_titik_implant'] != name)
+                                'Titik: ${s['nama_titik_implant']}',
+                            ].join(' • '),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          trailing: isActive
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: Color(0xFFFEA103),
+                                )
+                              : null,
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            if (!isActive) _switchImplant(id);
+                          },
+                        );
+                      }),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -310,12 +433,19 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Data Belum Tersimpan'),
-          content: const Text('Ada data muatan yang belum dikirim. Ganti implant?'),
+          content: const Text(
+            'Ada data muatan yang belum dikirim. Ganti implant?',
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFEA103)),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFFEA103),
+              ),
               child: const Text('Ganti'),
             ),
           ],
@@ -333,6 +463,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         if (token != null && token.isNotEmpty) {
           await ApiClient.saveToken(token);
           await ApiClient.saveImplantId(newImplantId);
+          _tokenRefreshAttempted = false;
 
           for (final c in _allControllers) {
             c.text = '';
@@ -356,7 +487,10 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
       if (mounted) {
         setState(() => _isSwitching = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal ganti implant: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Gagal ganti implant: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -411,11 +545,23 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     final ecerHvSeg = _ctrl(_ecerHvSegController);
     final ecerHvBtn = _ctrl(_ecerHvBtnController);
 
-    final totalInput = awb + koliJkt + koliSeg + koliBtn +
-        ecerJkt + ecerSeg + ecerBtn +
-        awbHvJkt + awbHvSeg + awbHvBtn +
-        koliHvJkt + koliHvSeg + koliHvBtn +
-        ecerHvJkt + ecerHvSeg + ecerHvBtn;
+    final totalInput =
+        awb +
+        koliJkt +
+        koliSeg +
+        koliBtn +
+        ecerJkt +
+        ecerSeg +
+        ecerBtn +
+        awbHvJkt +
+        awbHvSeg +
+        awbHvBtn +
+        koliHvJkt +
+        koliHvSeg +
+        koliHvBtn +
+        ecerHvJkt +
+        ecerHvSeg +
+        ecerHvBtn;
 
     if (totalInput == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -443,7 +589,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFFEA103)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFFEA103),
+            ),
             child: const Text('Ya, Kirim'),
           ),
         ],
@@ -473,11 +621,21 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         jenisRitase: 'outgoing',
         ritaseKe: _ritaseKe,
         jumlahAwb: awb,
-        koliJkt: koliJkt, koliSeg: koliSeg, koliBtn: koliBtn,
-        ecerJkt: ecerJkt, ecerSeg: ecerSeg, ecerBtn: ecerBtn,
-        awbHvJkt: awbHvJkt, awbHvSeg: awbHvSeg, awbHvBtn: awbHvBtn,
-        koliHvJkt: koliHvJkt, koliHvSeg: koliHvSeg, koliHvBtn: koliHvBtn,
-        ecerHvJkt: ecerHvJkt, ecerHvSeg: ecerHvSeg, ecerHvBtn: ecerHvBtn,
+        koliJkt: koliJkt,
+        koliSeg: koliSeg,
+        koliBtn: koliBtn,
+        ecerJkt: ecerJkt,
+        ecerSeg: ecerSeg,
+        ecerBtn: ecerBtn,
+        awbHvJkt: awbHvJkt,
+        awbHvSeg: awbHvSeg,
+        awbHvBtn: awbHvBtn,
+        koliHvJkt: koliHvJkt,
+        koliHvSeg: koliHvSeg,
+        koliHvBtn: koliHvBtn,
+        ecerHvJkt: ecerHvJkt,
+        ecerHvSeg: ecerHvSeg,
+        ecerHvBtn: ecerHvBtn,
         namaLokasi: _implantName,
         fotoManifestUrl: fotoUrl,
         catatan: _catatanController.text.trim(),
@@ -491,7 +649,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
 
         setState(() {
           _isOldData = true;
-          _successMsg = isUpdated ? 'Data berhasil diupdate!' : 'Data muatan berhasil disimpan!';
+          _successMsg = isUpdated
+              ? 'Data berhasil diupdate!'
+              : 'Data muatan berhasil disimpan!';
           _isSubmitting = false;
           _fotoPath = null;
         });
@@ -540,13 +700,22 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 color: Color(0xFFDCFCE7),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.check_rounded, color: Color(0xFF16A34A), size: 24),
+              child: const Icon(
+                Icons.check_rounded,
+                color: Color(0xFF16A34A),
+                size: 24,
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                isUpdated ? 'Data Berhasil Diupdate!' : 'Data Berhasil Disimpan!',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                isUpdated
+                    ? 'Data Berhasil Diupdate!'
+                    : 'Data Berhasil Disimpan!',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 17,
+                ),
               ),
             ),
           ],
@@ -558,7 +727,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
             if (_implantName.isNotEmpty)
               Text(
                 '$_implantName • Rit $_ritaseKe',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF475569), fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF475569),
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             const SizedBox(height: 8),
             const Text(
@@ -570,12 +743,36 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                _buildInfoChip('$_prevAwb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
-                _buildInfoChip('$totalKoli Koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
-                _buildInfoChip('$totalEcer Ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
-                _buildInfoChip('$totalAwbHv AWB HV', const Color(0xFFFDE7E7), const Color(0xFFB91C1C)),
-                _buildInfoChip('$totalKoliHv Koli HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
-                _buildInfoChip('$totalEcerHv Ecer HV', const Color(0xFFFFE7E7), const Color(0xFFC2410C)),
+                _buildInfoChip(
+                  '$_prevAwb AWB',
+                  const Color(0xFFEDE9FE),
+                  const Color(0xFF6D28D9),
+                ),
+                _buildInfoChip(
+                  '$totalKoli Koli',
+                  const Color(0xFFDBEAFE),
+                  const Color(0xFF1E40AF),
+                ),
+                _buildInfoChip(
+                  '$totalEcer Ecer',
+                  const Color(0xFFFEF9C3),
+                  const Color(0xFF854D0E),
+                ),
+                _buildInfoChip(
+                  '$totalAwbHv AWB HV',
+                  const Color(0xFFFDE7E7),
+                  const Color(0xFFB91C1C),
+                ),
+                _buildInfoChip(
+                  '$totalKoliHv Koli HV',
+                  const Color(0xFFFEF3C7),
+                  const Color(0xFFB45309),
+                ),
+                _buildInfoChip(
+                  '$totalEcerHv Ecer HV',
+                  const Color(0xFFFFE7E7),
+                  const Color(0xFFC2410C),
+                ),
               ],
             ),
           ],
@@ -586,10 +783,18 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0D47A1),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Selesai', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Selesai',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
           ),
         ],
@@ -616,7 +821,9 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
             child: const Text('Batal', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Logout', style: TextStyle(color: Colors.white)),
           ),
@@ -643,30 +850,53 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         final shouldExit = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
             title: const Row(
               children: [
                 Icon(Icons.exit_to_app_rounded, color: Color(0xFFDC2626)),
                 SizedBox(width: 10),
-                Text('Keluar Aplikasi', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                Text(
+                  'Keluar Aplikasi',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                ),
               ],
             ),
             content: const Text(
               'Apakah Anda yakin ingin keluar dari MustGo?',
-              style: TextStyle(fontSize: 14, color: Color(0xFF475569), height: 1.4),
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0xFF475569),
+                height: 1.4,
+              ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Batal', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+                child: const Text(
+                  'Batal',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFDC2626),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Keluar', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                child: const Text(
+                  'Keluar',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             ],
           ),
@@ -674,493 +904,671 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         if (shouldExit == true) SystemNavigator.pop();
       },
       child: Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0D47A1),
-        elevation: 0,
-        automaticallyImplyLeading: false,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Kapten: $_driverName',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            if (_implantName.isNotEmpty)
-              Text(
-                _implantName,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Colors.white70),
-              ),
-          ],
-        ),
-        actions: [
-          Stack(
-            alignment: Alignment.center,
+        backgroundColor: const Color(0xFFF1F5F9),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF0D47A1),
+          elevation: 0,
+          automaticallyImplyLeading: false,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              IconButton(
-                icon: const Icon(Icons.assignment_turned_in_rounded),
-                tooltip: 'Konfirmasi Pengambilan',
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => KaptenConfirmScreen(implantName: _implantName),
-                    ),
-                  ).then((_) {
-                    // Konfirmasi mengubah sisa → refresh badge + data Rit.
-                    _refreshPendingCount();
-                    _fetchRitData();
-                  });
-                },
+              Text(
+                'Kapten: $_driverName',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              if (_pendingCount > 0)
-                Positioned(
-                  right: 6,
-                  top: 6,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFDC2626),
-                      shape: BoxShape.circle,
-                    ),
-                    constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                    child: Text(
-                      '$_pendingCount',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
+              if (_implantName.isNotEmpty)
+                Text(
+                  _implantName,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: Colors.white70,
                   ),
                 ),
             ],
           ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: _handleLogout,
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFF0D47A1)),
-            )
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Seller info card — tappable dropdown
-                  if (_implantName.isNotEmpty)
-                    GestureDetector(
-                      onTap: _implants.length > 1 ? _showImplantPicker : null,
-                      child: Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
+          actions: [
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.assignment_turned_in_rounded),
+                  tooltip: 'Konfirmasi Pengambilan',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            KaptenConfirmScreen(implantName: _implantName),
+                      ),
+                    ).then((_) {
+                      // Konfirmasi mengubah sisa → refresh badge + data Rit.
+                      _refreshPendingCount();
+                      _fetchRitData();
+                    });
+                  },
+                ),
+                if (_pendingCount > 0)
+                  Positioned(
+                    right: 6,
+                    top: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFDC2626),
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 18,
+                        minHeight: 18,
+                      ),
+                      child: Text(
+                        '$_pendingCount',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
                         ),
-                        child: _isSwitching
-                            ? const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(8),
-                                  child: SizedBox(
-                                    width: 24, height: 24,
-                                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Color(0xFF0D47A1)),
-                                  ),
-                                ),
-                              )
-                            : Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFFDBEAFE),
-                                      shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            IconButton(
+              icon: const Icon(Icons.logout_rounded),
+              onPressed: _handleLogout,
+            ),
+          ],
+        ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF0D47A1)),
+              )
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Implant info card — tappable dropdown (selalu tampil).
+                    if (_implants.isNotEmpty || _implantName.isNotEmpty)
+                      GestureDetector(
+                        onTap: _implants.length > 1
+                            ? _showImplantPicker
+                            : (_implants.isEmpty
+                                  ? _openImplantSelection
+                                  : null),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: _isSwitching
+                              ? const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(8),
+                                    child: SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2.5,
+                                        color: Color(0xFF0D47A1),
+                                      ),
                                     ),
-                                    child: const Icon(
-                                      Icons.store_rounded,
-                                      color: Color(0xFF0D47A1),
-                                      size: 24,
-                                    ),
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _implantName,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            color: Color(0xFF0F172A),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        const Text(
-                                          'Seller Implant',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Color(0xFF0D47A1),
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (_implants.length > 1)
-                                    const Icon(Icons.unfold_more, color: Color(0xFF94A3B8), size: 20)
-                                  else
+                                )
+                              : Row(
+                                  children: [
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFDCFCE7),
-                                        borderRadius: BorderRadius.circular(8),
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFDBEAFE),
+                                        shape: BoxShape.circle,
                                       ),
-                                      child: const Text(
-                                        'AKTIF',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                          color: Color(0xFF16A34A),
+                                      child: const Icon(
+                                        Icons.store_rounded,
+                                        color: Color(0xFF0D47A1),
+                                        size: 24,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _implantName.isEmpty
+                                                ? 'Pilih Implant'
+                                                : _implantName,
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFF0F172A),
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            _implantName.isEmpty
+                                                ? 'Ketuk untuk memilih implant'
+                                                : (_titikName.isNotEmpty &&
+                                                          _titikName !=
+                                                              _implantName
+                                                      ? 'Titik: $_titikName'
+                                                      : (_implants.length > 1
+                                                            ? 'Ketuk untuk ganti implant'
+                                                            : 'Seller Implant')),
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xFF0D47A1),
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (_implants.length > 1)
+                                      const Icon(
+                                        Icons.unfold_more,
+                                        color: Color(0xFF94A3B8),
+                                        size: 20,
+                                      )
+                                    else if (_implants.length == 1)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
                                         ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFDCFCE7),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'AKTIF',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: Color(0xFF16A34A),
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      const Icon(
+                                        Icons.chevron_right,
+                                        color: Color(0xFF94A3B8),
+                                        size: 22,
                                       ),
-                                     ),
                                   ],
                                 ),
-                              ),
+                        ),
                       ),
 
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 20),
 
-                  // Ritase selector
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Pilih Ritase',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0F172A),
+                    // Ritase selector
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Pilih Ritase',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF0F172A),
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        if (_noRitaseMessage != null)
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFEF3C7),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFFDE68A)),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.schedule, size: 18, color: Color(0xFF92400E)),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _noRitaseMessage!,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Color(0xFF92400E),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
+                          const SizedBox(height: 12),
+                          if (_noRitaseMessage != null)
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF3C7),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(0xFFFDE68A),
                                 ),
-                              ],
-                            ),
-                          )
-                        else
-                          // Ritase tabs: selalu tampil 1-2-3, inactive = gray + lock
-                          Row(
-                            children: [1, 2, 3].map((ke) {
-                              final isActive = _activeRitases.contains(ke);
-                              final isSelected = _ritaseKe == ke;
-                              return Expanded(
-                                child: Padding(
-                                  padding: EdgeInsets.only(right: ke != 3 ? 8 : 0),
-                                  child: GestureDetector(
-                                    onTap: isActive
-                                        ? () {
-                                            if (ke == _ritaseKe) return;
-                                            // Bersihkan data + pesan Rit lama agar tidak bocor ke tab baru.
-                                            setState(() {
-                                              _ritaseKe = ke;
-                                              _successMsg = null;
-                                              _error = null;
-                                              _zeroPrev();
-                                            });
-                                            _fetchRitData();
-                                          }
-                                        : null,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: !isActive
-                                            ? Colors.grey.shade200
-                                            : isSelected
-                                                ? const Color(0xFFFEA103)
-                                                : const Color(0xFFF1F5F9),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(
-                                          color: !isActive
-                                              ? Colors.grey.shade300
-                                              : isSelected
-                                                  ? const Color(0xFFFEA103)
-                                                  : const Color(0xFFE2E8F0),
-                                        ),
-                                      ),
-                                      child: Center(
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            if (!isActive) ...[
-                                              Icon(Icons.lock_outline, size: 13, color: Colors.grey.shade500),
-                                              const SizedBox(width: 4),
-                                            ],
-                                            Text(
-                                              'Rit $ke',
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.bold,
-                                                color: !isActive
-                                                    ? Colors.grey.shade500
-                                                    : isSelected
-                                                        ? Colors.white
-                                                        : const Color(0xFF64748B),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.schedule,
+                                    size: 18,
+                                    color: Color(0xFF92400E),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _noRitaseMessage!,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF92400E),
+                                        fontWeight: FontWeight.w500,
                                       ),
                                     ),
                                   ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // Form section — kartu putih pembungkus judul s.d. data saat ini
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Input Data Muatan',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF0F172A),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Isi data barang yang masuk ke implant ini',
-                          style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                        ),
-                        const SizedBox(height: 16),
-
-                        // Error message
-                        if (_error != null)
-                          _buildBanner(
-                            icon: Icons.error_outline,
-                            color: const Color(0xFFDC2626),
-                            bgColor: const Color(0xFFFEF2F2),
-                            borderColor: const Color(0xFFFECACA),
-                            text: _error!,
-                          ),
-
-                        // Success message
-                        if (_successMsg != null)
-                          _buildBanner(
-                            icon: Icons.check_circle_outline,
-                            color: const Color(0xFF16A34A),
-                            bgColor: const Color(0xFFF0FDF4),
-                            borderColor: const Color(0xFF86EFAC),
-                            text: _successMsg!,
-                          ),
-
-                        // Info data sebelumnya
-                        if (_isOldData)
-                          _buildPreviousDataCard(),
-                      ],
-                    ),
-                  ),
-
-                  // Input AWB
-                  _buildInputField(
-                    controller: _awbController,
-                    label: 'Jumlah AWB',
-                    icon: Icons.receipt_long_outlined,
-                    color: const Color(0xFF6366F1),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // === Section KOLI ===
-                  _buildSectionHeader('Koli', Icons.inventory_2_outlined, const Color(0xFF0D47A1)),
-                  _buildRowInputs([
-                    _FieldDef(_koliJktController, 'JKT', const Color(0xFF0D47A1)),
-                    _FieldDef(_koliSegController, 'SEG', const Color(0xFF0284C7)),
-                    _FieldDef(_koliBtnController, 'BTN', const Color(0xFF0369A1)),
-                  ]),
-                  const SizedBox(height: 16),
-
-                  // === Section ECER ===
-                  _buildSectionHeader('Ecer', Icons.shopping_bag_outlined, const Color(0xFF16A34A)),
-                  _buildRowInputs([
-                    _FieldDef(_ecerJktController, 'JKT', const Color(0xFF16A34A)),
-                    _FieldDef(_ecerSegController, 'SEG', const Color(0xFF15803D)),
-                    _FieldDef(_ecerBtnController, 'BTN', const Color(0xFF166534)),
-                  ]),
-                  const SizedBox(height: 16),
-
-                  // === Section AWB HV (baru, 3 wilayah) ===
-                  _buildSectionHeader('AWB HV', Icons.local_offer_outlined, const Color(0xFFB91C1C)),
-                  _buildRowInputs([
-                    _FieldDef(_awbHvJktController, 'JKT', const Color(0xFFB91C1C)),
-                    _FieldDef(_awbHvSegController, 'SEG', const Color(0xFFDC2626)),
-                    _FieldDef(_awbHvBtnController, 'BTN', const Color(0xFF991B1B)),
-                  ]),
-                  const SizedBox(height: 16),
-
-                  // === Section KOLI HV (3 wilayah) ===
-                  _buildSectionHeader('Koli HV', Icons.star_outline, const Color(0xFFF59E0B)),
-                  _buildRowInputs([
-                    _FieldDef(_koliHvJktController, 'JKT', const Color(0xFFF59E0B)),
-                    _FieldDef(_koliHvSegController, 'SEG', const Color(0xFFD97706)),
-                    _FieldDef(_koliHvBtnController, 'BTN', const Color(0xFFB45309)),
-                  ]),
-                  const SizedBox(height: 16),
-
-                  // === Section ECER HV (3 wilayah) ===
-                  _buildSectionHeader('Ecer HV', Icons.star_half_outlined, const Color(0xFFEA580C)),
-                  _buildRowInputs([
-                    _FieldDef(_ecerHvJktController, 'JKT', const Color(0xFFEA580C)),
-                    _FieldDef(_ecerHvSegController, 'SEG', const Color(0xFFC2410C)),
-                    _FieldDef(_ecerHvBtnController, 'BTN', const Color(0xFF9A3412)),
-                  ]),
-                  const SizedBox(height: 16),
-
-                  // Foto section
-                  _buildFotoSection(),
-                  const SizedBox(height: 16),
-
-                  // Catatan (opsional)
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.note_alt_outlined, size: 18, color: Colors.grey.shade600),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Catatan (opsional)',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.grey.shade700,
+                                ],
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _catatanController,
-                          maxLines: 3,
-                          minLines: 2,
-                          textInputAction: TextInputAction.newline,
-                          decoration: InputDecoration(
-                            hintText: 'Tambahkan catatan jika diperlukan...',
-                            hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8),
-                              borderSide: const BorderSide(color: Color(0xFF0D47A1), width: 1.5),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            isDense: true,
-                          ),
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Submit button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      onPressed: (_isSubmitting || _ritaseKe == 0 || !_activeRitases.contains(_ritaseKe)) ? null : _submit,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0D47A1),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        elevation: 0,
-                      ),
-                      child: _isSubmitting
-                          ? const SizedBox(
-                              height: 22,
-                              width: 22,
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
                             )
-                          : const Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.save_rounded, size: 22),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Simpan Data Muatan',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                                ),
-                              ],
+                          else
+                            // Ritase tabs: selalu tampil 1-2-3, inactive = gray + lock
+                            Row(
+                              children: [1, 2, 3].map((ke) {
+                                final isActive = _activeRitases.contains(ke);
+                                final isSelected = _ritaseKe == ke;
+                                return Expanded(
+                                  child: Padding(
+                                    padding: EdgeInsets.only(
+                                      right: ke != 3 ? 8 : 0,
+                                    ),
+                                    child: GestureDetector(
+                                      onTap: isActive
+                                          ? () {
+                                              if (ke == _ritaseKe) return;
+                                              // Bersihkan data + pesan Rit lama agar tidak bocor ke tab baru.
+                                              setState(() {
+                                                _ritaseKe = ke;
+                                                _successMsg = null;
+                                                _error = null;
+                                                _zeroPrev();
+                                              });
+                                              _fetchRitData();
+                                            }
+                                          : null,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 10,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: !isActive
+                                              ? Colors.grey.shade200
+                                              : isSelected
+                                              ? const Color(0xFFFEA103)
+                                              : const Color(0xFFF1F5F9),
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: !isActive
+                                                ? Colors.grey.shade300
+                                                : isSelected
+                                                ? const Color(0xFFFEA103)
+                                                : const Color(0xFFE2E8F0),
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (!isActive) ...[
+                                                Icon(
+                                                  Icons.lock_outline,
+                                                  size: 13,
+                                                  color: Colors.grey.shade500,
+                                                ),
+                                                const SizedBox(width: 4),
+                                              ],
+                                              Text(
+                                                'Rit $ke',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: !isActive
+                                                      ? Colors.grey.shade500
+                                                      : isSelected
+                                                      ? Colors.white
+                                                      : const Color(0xFF64748B),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
                             ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                ],
+
+                    const SizedBox(height: 20),
+
+                    // Form section — kartu putih pembungkus judul s.d. data saat ini
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Input Data Muatan',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Isi data barang yang masuk ke implant ini',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Error message
+                          if (_error != null)
+                            _buildBanner(
+                              icon: Icons.error_outline,
+                              color: const Color(0xFFDC2626),
+                              bgColor: const Color(0xFFFEF2F2),
+                              borderColor: const Color(0xFFFECACA),
+                              text: _error!,
+                            ),
+
+                          // Success message
+                          if (_successMsg != null)
+                            _buildBanner(
+                              icon: Icons.check_circle_outline,
+                              color: const Color(0xFF16A34A),
+                              bgColor: const Color(0xFFF0FDF4),
+                              borderColor: const Color(0xFF86EFAC),
+                              text: _successMsg!,
+                            ),
+
+                          // Info data sebelumnya
+                          if (_isOldData) _buildPreviousDataCard(),
+                        ],
+                      ),
+                    ),
+
+                    // Input AWB
+                    _buildInputField(
+                      controller: _awbController,
+                      label: 'Jumlah AWB',
+                      icon: Icons.receipt_long_outlined,
+                      color: const Color(0xFF6366F1),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // === Section KOLI ===
+                    _buildSectionHeader(
+                      'Koli',
+                      Icons.inventory_2_outlined,
+                      const Color(0xFF0D47A1),
+                    ),
+                    _buildRowInputs([
+                      _FieldDef(
+                        _koliJktController,
+                        'JKT',
+                        const Color(0xFF0D47A1),
+                      ),
+                      _FieldDef(
+                        _koliSegController,
+                        'SEG',
+                        const Color(0xFF0284C7),
+                      ),
+                      _FieldDef(
+                        _koliBtnController,
+                        'BTN',
+                        const Color(0xFF0369A1),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+
+                    // === Section ECER ===
+                    _buildSectionHeader(
+                      'Ecer',
+                      Icons.shopping_bag_outlined,
+                      const Color(0xFF16A34A),
+                    ),
+                    _buildRowInputs([
+                      _FieldDef(
+                        _ecerJktController,
+                        'JKT',
+                        const Color(0xFF16A34A),
+                      ),
+                      _FieldDef(
+                        _ecerSegController,
+                        'SEG',
+                        const Color(0xFF15803D),
+                      ),
+                      _FieldDef(
+                        _ecerBtnController,
+                        'BTN',
+                        const Color(0xFF166534),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+
+                    // === Section AWB HV (baru, 3 wilayah) ===
+                    _buildSectionHeader(
+                      'AWB HV',
+                      Icons.local_offer_outlined,
+                      const Color(0xFFB91C1C),
+                    ),
+                    _buildRowInputs([
+                      _FieldDef(
+                        _awbHvJktController,
+                        'JKT',
+                        const Color(0xFFB91C1C),
+                      ),
+                      _FieldDef(
+                        _awbHvSegController,
+                        'SEG',
+                        const Color(0xFFDC2626),
+                      ),
+                      _FieldDef(
+                        _awbHvBtnController,
+                        'BTN',
+                        const Color(0xFF991B1B),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+
+                    // === Section KOLI HV (3 wilayah) ===
+                    _buildSectionHeader(
+                      'Koli HV',
+                      Icons.star_outline,
+                      const Color(0xFFF59E0B),
+                    ),
+                    _buildRowInputs([
+                      _FieldDef(
+                        _koliHvJktController,
+                        'JKT',
+                        const Color(0xFFF59E0B),
+                      ),
+                      _FieldDef(
+                        _koliHvSegController,
+                        'SEG',
+                        const Color(0xFFD97706),
+                      ),
+                      _FieldDef(
+                        _koliHvBtnController,
+                        'BTN',
+                        const Color(0xFFB45309),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+
+                    // === Section ECER HV (3 wilayah) ===
+                    _buildSectionHeader(
+                      'Ecer HV',
+                      Icons.star_half_outlined,
+                      const Color(0xFFEA580C),
+                    ),
+                    _buildRowInputs([
+                      _FieldDef(
+                        _ecerHvJktController,
+                        'JKT',
+                        const Color(0xFFEA580C),
+                      ),
+                      _FieldDef(
+                        _ecerHvSegController,
+                        'SEG',
+                        const Color(0xFFC2410C),
+                      ),
+                      _FieldDef(
+                        _ecerHvBtnController,
+                        'BTN',
+                        const Color(0xFF9A3412),
+                      ),
+                    ]),
+                    const SizedBox(height: 16),
+
+                    // Foto section
+                    _buildFotoSection(),
+                    const SizedBox(height: 16),
+
+                    // Catatan (opsional)
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.note_alt_outlined,
+                                size: 18,
+                                color: Colors.grey.shade600,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Catatan (opsional)',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey.shade700,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _catatanController,
+                            maxLines: 3,
+                            minLines: 2,
+                            textInputAction: TextInputAction.newline,
+                            decoration: InputDecoration(
+                              hintText: 'Tambahkan catatan jika diperlukan...',
+                              hintStyle: TextStyle(
+                                color: Colors.grey.shade400,
+                                fontSize: 13,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFF0D47A1),
+                                  width: 1.5,
+                                ),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              isDense: true,
+                            ),
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Submit button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed:
+                            (_isSubmitting ||
+                                _ritaseKe == 0 ||
+                                !_activeRitases.contains(_ritaseKe))
+                            ? null
+                            : _submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0D47A1),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: _isSubmitting
+                            ? const SizedBox(
+                                height: 22,
+                                width: 22,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2.5,
+                                ),
+                              )
+                            : const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.save_rounded, size: 22),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Simpan Data Muatan',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
               ),
-            ),
-          ),
+      ),
     );
   }
 
@@ -1226,10 +1634,17 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     final totalKoli = d['koli_jkt']! + d['koli_seg']! + d['koli_btn']!;
     final totalEcer = d['ecer_jkt']! + d['ecer_seg']! + d['ecer_btn']!;
     final totalAwbHv = d['awb_hv_jkt']! + d['awb_hv_seg']! + d['awb_hv_btn']!;
-    final totalKoliHv = d['koli_hv_jkt']! + d['koli_hv_seg']! + d['koli_hv_btn']!;
-    final totalEcerHv = d['ecer_hv_jkt']! + d['ecer_hv_seg']! + d['ecer_hv_btn']!;
-    final allZero = awb == 0 && totalKoli == 0 && totalEcer == 0 &&
-        totalAwbHv == 0 && totalKoliHv == 0 && totalEcerHv == 0;
+    final totalKoliHv =
+        d['koli_hv_jkt']! + d['koli_hv_seg']! + d['koli_hv_btn']!;
+    final totalEcerHv =
+        d['ecer_hv_jkt']! + d['ecer_hv_seg']! + d['ecer_hv_btn']!;
+    final allZero =
+        awb == 0 &&
+        totalKoli == 0 &&
+        totalEcer == 0 &&
+        totalAwbHv == 0 &&
+        totalKoliHv == 0 &&
+        totalEcerHv == 0;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
@@ -1243,7 +1658,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.info_outline, color: Color(0xFF2563EB), size: 18),
+              const Icon(
+                Icons.info_outline,
+                color: Color(0xFF2563EB),
+                size: 18,
+              ),
               const SizedBox(width: 6),
               const Expanded(
                 child: Text(
@@ -1268,7 +1687,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                         color: Color(0xFF2563EB),
                       ),
                     ),
-                    Icon(Icons.chevron_right_rounded, size: 16, color: Color(0xFF2563EB)),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 16,
+                      color: Color(0xFF2563EB),
+                    ),
                   ],
                 ),
               ),
@@ -1279,23 +1702,61 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              if (awb > 0) _buildInfoChip('$awb AWB', Color(0xFFEDE9FE), Color(0xFF6D28D9)),
-              if (totalKoli > 0) _buildInfoChip('$totalKoli Koli', Color(0xFFDBEAFE), Color(0xFF1E40AF)),
-              if (totalEcer > 0) _buildInfoChip('$totalEcer Ecer', Color(0xFFFEF9C3), Color(0xFF854D0E)),
-              if (totalAwbHv > 0) _buildInfoChip('$totalAwbHv AWB HV', Color(0xFFFDE7E7), Color(0xFFB91C1C)),
-              if (totalKoliHv > 0) _buildInfoChip('$totalKoliHv Koli HV', Color(0xFFFEF3C7), Color(0xFFB45309)),
-              if (totalEcerHv > 0) _buildInfoChip('$totalEcerHv Ecer HV', Color(0xFFFFE7E7), Color(0xFFC2410C)),
+              if (awb > 0)
+                _buildInfoChip(
+                  '$awb AWB',
+                  Color(0xFFEDE9FE),
+                  Color(0xFF6D28D9),
+                ),
+              if (totalKoli > 0)
+                _buildInfoChip(
+                  '$totalKoli Koli',
+                  Color(0xFFDBEAFE),
+                  Color(0xFF1E40AF),
+                ),
+              if (totalEcer > 0)
+                _buildInfoChip(
+                  '$totalEcer Ecer',
+                  Color(0xFFFEF9C3),
+                  Color(0xFF854D0E),
+                ),
+              if (totalAwbHv > 0)
+                _buildInfoChip(
+                  '$totalAwbHv AWB HV',
+                  Color(0xFFFDE7E7),
+                  Color(0xFFB91C1C),
+                ),
+              if (totalKoliHv > 0)
+                _buildInfoChip(
+                  '$totalKoliHv Koli HV',
+                  Color(0xFFFEF3C7),
+                  Color(0xFFB45309),
+                ),
+              if (totalEcerHv > 0)
+                _buildInfoChip(
+                  '$totalEcerHv Ecer HV',
+                  Color(0xFFFFE7E7),
+                  Color(0xFFC2410C),
+                ),
             ],
           ),
           const SizedBox(height: 6),
           allZero
               ? const Text(
                   'Semua muatan sudah diangkut di rit ini',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF16A34A), fontWeight: FontWeight.w700),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF16A34A),
+                    fontWeight: FontWeight.w700,
+                  ),
                 )
               : Text(
                   'Input baru akan ditambahkan ke data di atas',
-                  style: TextStyle(fontSize: 11, color: Colors.blue[600], fontStyle: FontStyle.italic),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.blue[600],
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
         ],
       ),
@@ -1307,11 +1768,7 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
   Future<void> _showInputDetailDialog() async {
     final d = _dispValues();
     final rows = <Map<String, dynamic>>[
-      {
-        'title': 'AWB',
-        'total': d['jumlah_awb']!,
-        'regions': <int>[],
-      },
+      {'title': 'AWB', 'total': d['jumlah_awb']!, 'regions': <int>[]},
       {
         'title': 'Koli',
         'total': d['koli_jkt']! + d['koli_seg']! + d['koli_btn']!,
@@ -1356,7 +1813,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
             if (_implantName.isNotEmpty)
               Text(
                 '$_implantName • Rit $_ritaseKe',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), fontWeight: FontWeight.w500),
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF64748B),
+                  fontWeight: FontWeight.w500,
+                ),
               ),
           ],
         ),
@@ -1365,80 +1826,109 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
               ? Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-              for (final row in rows)
-                if ((row['total'] as int) > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              row['title'] as String,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF0F172A)),
-                            ),
-                            Text(
-                              '${row['total']}',
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0D47A1)),
-                            ),
-                          ],
-                        ),
-                        if ((row['regions'] as List<int>).isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Row(
+                    for (final row in rows)
+                      if ((row['total'] as int) > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              for (var i = 0; i < 3; i++)
-                                Expanded(
-                                  child: Container(
-                                    margin: EdgeInsets.only(right: i < 2 ? 6 : 0),
-                                    padding: const EdgeInsets.symmetric(vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF1F5F9),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        Text(
-                                          regionLabels[i],
-                                          style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w600, color: Color(0xFF64748B)),
-                                        ),
-                                        Text(
-                                          '${(row['regions'] as List<int>)[i]}',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.bold,
-                                            color: (row['regions'] as List<int>)[i] > 0
-                                                ? const Color(0xFF0F172A)
-                                                : const Color(0xFFCBD5E1),
-                                          ),
-                                        ),
-                                      ],
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    row['title'] as String,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF0F172A),
                                     ),
                                   ),
+                                  Text(
+                                    '${row['total']}',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF0D47A1),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if ((row['regions'] as List<int>).isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    for (var i = 0; i < 3; i++)
+                                      Expanded(
+                                        child: Container(
+                                          margin: EdgeInsets.only(
+                                            right: i < 2 ? 6 : 0,
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFF1F5F9),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            children: [
+                                              Text(
+                                                regionLabels[i],
+                                                style: const TextStyle(
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: Color(0xFF64748B),
+                                                ),
+                                              ),
+                                              Text(
+                                                '${(row['regions'] as List<int>)[i]}',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color:
+                                                      (row['regions']
+                                                              as List<int>)[i] >
+                                                          0
+                                                      ? const Color(0xFF0F172A)
+                                                      : const Color(0xFFCBD5E1),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
+                              ],
                             ],
                           ),
-                        ],
-                      ],
-                    ),
-                  ),
-            ],
-          )
+                        ),
+                  ],
+                )
               : const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Text(
                     'Semua muatan sudah diangkut di rit ini',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: Color(0xFF16A34A), fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF16A34A),
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Tutup', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+            child: const Text(
+              'Tutup',
+              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -1494,7 +1984,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
           padding: const EdgeInsets.only(left: 2, bottom: 4),
           child: Text(
             label,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
         ),
         Container(
@@ -1510,7 +2004,10 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                   controller: controller,
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
                     hintText: '0',
@@ -1519,7 +2016,10 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                       fontSize: 16,
                       fontWeight: FontWeight.normal,
                     ),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 10,
+                    ),
                   ),
                 ),
               ),
@@ -1575,7 +2075,10 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                   controller: controller,
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
                     hintText: '0',
@@ -1616,11 +2119,19 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         children: [
           const Row(
             children: [
-              Icon(Icons.camera_alt_outlined, size: 20, color: Color(0xFF64748B)),
+              Icon(
+                Icons.camera_alt_outlined,
+                size: 20,
+                color: Color(0xFF64748B),
+              ),
               SizedBox(width: 8),
               Text(
                 'Foto Barang',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF334155),
+                ),
               ),
             ],
           ),
@@ -1637,11 +2148,18 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 32),
+                    const Icon(
+                      Icons.check_circle,
+                      color: Color(0xFF16A34A),
+                      size: 32,
+                    ),
                     const SizedBox(height: 8),
                     const Text(
                       'Foto sudah diambil',
-                      style: TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                        color: Color(0xFF16A34A),
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                     TextButton(
                       onPressed: () => setState(() => _fotoPath = null),
@@ -1669,7 +2187,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
                 child: const Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.camera_alt_outlined, color: Color(0xFF94A3B8), size: 36),
+                    Icon(
+                      Icons.camera_alt_outlined,
+                      color: Color(0xFF94A3B8),
+                      size: 36,
+                    ),
                     SizedBox(height: 8),
                     Text(
                       'Tap untuk ambil foto',
@@ -1684,7 +2206,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
     );
   }
 
-  Widget _buildQuickAddButton(TextEditingController controller, int amount, Color color) {
+  Widget _buildQuickAddButton(
+    TextEditingController controller,
+    int amount,
+    Color color,
+  ) {
     return InkWell(
       onTap: () {
         final current = int.tryParse(controller.text) ?? 0;
@@ -1699,7 +2225,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
         ),
         child: Text(
           '+$amount',
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
         ),
       ),
     );
@@ -1714,7 +2244,11 @@ class _KaptenHomeScreenState extends State<KaptenHomeScreen> {
       ),
       child: Text(
         label,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: textColor),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: textColor,
+        ),
       ),
     );
   }

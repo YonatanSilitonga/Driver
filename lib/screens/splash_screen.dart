@@ -6,7 +6,7 @@ import '../services/background_tracking.dart';
 import '../utils/network_exception.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
-import 'kapten_home_screen.dart';
+import 'implant_selection_screen.dart';
 import 'pickup/pickup_home_screen.dart';
 import 'permission_guide_screen.dart';
 
@@ -102,17 +102,19 @@ class _SplashScreenState extends State<SplashScreen>
             final userRole = (user['role'] ?? '').toString().trim().toLowerCase();
             final isPickup = userRole == 'driver_pickup' || role == 'driver_pickup';
             final isKapten = userRole == 'kapten' || role == 'kapten';
+            // Kapten selalu lewat pemilihan implant agar token memuat
+            // klaim id_implant (token dari login / sesi lama tidak punya).
             destination = isPickup
                 ? const PickupHomeScreen()
-                : (isKapten ? const KaptenHomeScreen() : const HomeScreen());
+                : (isKapten
+                    ? const ImplantSelectionScreen()
+                    : const HomeScreen());
             if (!isKapten) {
               try {
                 await startBackgroundTracking();
               } catch (_) {}
-            } else {
-            // Token invalid/expired dari server → bersihkan sesi
-            await ApiClient.clearToken();
-          }}
+            }
+          }
         } on NetworkException catch (netErr) {
           if (netErr.type == NetworkErrorType.unauthorized) {
             // Sesi memang sudah invalid dari server (401/403)
@@ -122,7 +124,7 @@ class _SplashScreenState extends State<SplashScreen>
             final cfg = await ApiClient.loadDriverConfig();
             final savedRole = (cfg['role'] ?? '').toString().trim().toLowerCase();
             if (savedRole == 'kapten') {
-              destination = const KaptenHomeScreen();
+              destination = const ImplantSelectionScreen();
             } else if (savedRole == 'driver_pickup') {
               destination = const PickupHomeScreen();
             } else {
@@ -134,8 +136,12 @@ class _SplashScreenState extends State<SplashScreen>
         }} catch (_) {
           // Error jaringan umum -> Cek role tersimpan di HP
           final cfg = await ApiClient.loadDriverConfig();
-          final isPickup = (cfg['role'] ?? '').toString().trim().toLowerCase() == 'driver_pickup';
-          destination = isPickup ? const PickupHomeScreen() : const HomeScreen();
+          final savedRole = (cfg['role'] ?? '').toString().trim().toLowerCase();
+          destination = savedRole == 'driver_pickup'
+              ? const PickupHomeScreen()
+              : (savedRole == 'kapten'
+                  ? const ImplantSelectionScreen()
+                  : const HomeScreen());
         }
       }
     } catch (_) {

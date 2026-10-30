@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
+import '../services/auth_service.dart';
 import 'kapten_home_screen.dart';
+import 'login_screen.dart';
 
 class ImplantSelectionScreen extends StatefulWidget {
   const ImplantSelectionScreen({super.key});
@@ -15,6 +17,10 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
   String? _error;
   bool _isSelecting = false;
 
+  /// Implant yang terakhir dipakai (dari sesi sebelumnya) — ditandai agar
+  /// kapten cukup satu tap untuk lanjut, tanpa logout.
+  int _savedImplantId = 0;
+
   @override
   void initState() {
     super.initState();
@@ -23,9 +29,11 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
 
   Future<void> _loadImplants() async {
     try {
+      final saved = await ApiClient.getImplantId();
       final implants = await ApiClient.getMyImplants();
       if (mounted) {
         setState(() {
+          _savedImplantId = saved;
           _implants = implants;
           _isLoading = false;
         });
@@ -56,12 +64,15 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
           await ApiClient.saveUserRole('kapten');
 
           if (!mounted) return;
-          Navigator.push(
+          setState(() => _savedImplantId = implantId);
+          await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const KaptenHomeScreen()),
-          ).then((_) {
-            if (mounted) _loadImplants();
-          });
+          );
+          if (mounted) {
+            setState(() => _isSelecting = false);
+            _loadImplants();
+          }
         }
       }
     } catch (e) {
@@ -77,43 +88,72 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
     }
   }
 
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Logout'),
+        content: const Text('Yakin ingin keluar dari aplikasi?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await AuthService.logout();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFFF8FAFC),
+        foregroundColor: const Color(0xFF0F172A),
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        title: const Text(
+          'Pilih Implant',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout_rounded),
+            tooltip: 'Logout',
+            onPressed: _isSelecting ? null : _handleLogout,
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 40),
-              const Icon(
-                Icons.store,
-                size: 48,
-                color: Color(0xFFFEA103),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Pilih Implant',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF0F172A),
-                ),
-              ),
-              const SizedBox(height: 8),
+              const Icon(Icons.store, size: 44, color: Color(0xFFFEA103)),
+              const SizedBox(height: 12),
               const Text(
                 'Pilih implant yang sedang Anda kerjakan:',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF64748B),
-                ),
+                style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
               ),
-              const SizedBox(height: 24),
-              Expanded(
-                child: _buildContent(),
-              ),
+              const SizedBox(height: 16),
+              Expanded(child: _buildContent()),
             ],
           ),
         ),
@@ -142,13 +182,13 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _isLoading = true;
-                    _error = null;
-                  });
-                  _loadImplants();
-                },
+              onPressed: () {
+                setState(() {
+                  _isLoading = true;
+                  _error = null;
+                });
+                _loadImplants();
+              },
               child: const Text('Coba Lagi'),
             ),
           ],
@@ -172,7 +212,10 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
         final implant = _implants[index];
         final namaImplant = implant['nama_implant'] ?? '-';
         final kodeImplant = implant['kode_implant'] ?? '';
-        final peran = implant['peran'] ?? 'utama';
+        final titikImplant = (implant['nama_titik_implant'] ?? '').toString();
+        final isLastUsed =
+            _savedImplantId > 0 &&
+            (implant['id_implant'] as int?) == _savedImplantId;
 
         return InkWell(
           onTap: _isSelecting ? null : () => _selectImplant(implant),
@@ -182,7 +225,11 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
+              border: Border.all(
+                color: isLastUsed
+                    ? const Color(0xFFFEA103)
+                    : const Color(0xFFE2E8F0),
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.04),
@@ -227,15 +274,40 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
                             color: Color(0xFF94A3B8),
                           ),
                         ),
-                      Text(
-                        peran == 'cadangan' ? 'Cadangan' : 'Utama',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: peran == 'cadangan'
-                              ? const Color(0xFF0284C7)
-                              : const Color(0xFF059669),
-                        ),
+                      Row(
+                        children: [
+                          if (titikImplant.isNotEmpty &&
+                              titikImplant != namaImplant)
+                            Text(
+                              'Titik: $titikImplant',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF0284C7),
+                              ),
+                            ),
+                          if (isLastUsed) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF3C7),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'Terakhir dipakai',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFFB45309),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -250,10 +322,7 @@ class _ImplantSelectionScreenState extends State<ImplantSelectionScreen> {
                     ),
                   )
                 else
-                  const Icon(
-                    Icons.chevron_right,
-                    color: Color(0xFF94A3B8),
-                  ),
+                  const Icon(Icons.chevron_right, color: Color(0xFF94A3B8)),
               ],
             ),
           ),

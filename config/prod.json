@@ -1,0 +1,5 @@
+{
+  "API_URL": "https://api.controltowerslb.tech/api/v1",
+  "API_URL_FALLBACK": "",
+  "PRODUCTION": "true"
+}

@@ -4,14 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/api_client.dart';
 
-/// Layar "Konfirmasi Pengambilan" untuk kapten (implant).
+/// Layar "Konfirmasi Pengambilan" untuk kapten.
 ///
-/// Alur: kapten input muatan dulu (id_ritase NULL). Saat driver datang mengambil
-/// barang, kapten memilih trip (ritase) yang datang, mengisi BERAPA yang diambil
-/// (terisi otomatis = SISA saat ini, tinggal dikurangi), foto bukti (opsional),
-/// dan catatan sisa (opsional) — lalu Konfirmasi.
-/// Boleh dikonfirmasi berkali-kali (ambil bertahap); sisa = input − akumulasi.
-/// Kolom "diambil" hanya menampilkan metrik yang sisanya > 0.
+/// Menampilkan SEMUA implant kapten. Tiap implant punya card sendiri dan bisa
+/// dicentang untuk ikut dijemput. Satu grup (jenis + Rit) memakai satu driver,
+/// satu foto/catatan, dan satu transaksi konfirmasi untuk semua card tercentang.
 class KaptenConfirmScreen extends StatefulWidget {
   final String implantName;
 
@@ -24,27 +21,31 @@ class KaptenConfirmScreen extends StatefulWidget {
 class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
   bool _isLoading = true;
   String? _error;
-  List<Map<String, dynamic>> _pending = [];
-  List<Map<String, dynamic>> _ritases = [];
-  List<Map<String, dynamic>> _riwayat = [];
-  List<Map<String, dynamic>> _sisaGrup = [];
+  List<Map<String, dynamic>> _implants = [];
+  List<Map<String, dynamic>> _history = [];
+  bool _historyLoading = true;
+  String? _historyError;
+  String _historyFilter = 'week';
+  int? _historyImplant;
+  int _tabIndex = 0;
 
-  /// ritaseKe -> id_ritase yang dipilih di dropdown
-  final Map<int, int> _selectedRitase = {};
-  final Set<int> _confirming = {};
+  /// groupKey -> kandidat ritase yang menyinggahi semua implant tercentang
+  final Map<String, List<Map<String, dynamic>>> _candidates = {};
+  final Map<String, bool> _loadingCandidates = {};
+  final Map<String, int> _candidateSeq = {};
+  final Map<String, int> _selectedRitase = {};
+  final Map<String, Set<int>> _checked = {};
+  final Set<String> _confirming = {};
 
-  /// groupKey ("jenis__rit") -> metric key -> controller jumlah diambil
+  /// "$implantId__$groupKey" -> metric -> controller
   final Map<String, Map<String, TextEditingController>> _takenCtrls = {};
-  /// groupKey -> catatan controller
+
   final Map<String, TextEditingController> _catatanCtrls = {};
-  /// groupKey -> path foto serah terima (lokal, belum upload)
   final Map<String, String?> _handoverFoto = {};
   final Set<String> _uploadingFoto = {};
-  /// groupKey -> key untuk scroll dari tombol "Penjemputan kedua"
   final Map<String, GlobalKey> _groupKeys = {};
+  final Map<String, GlobalKey> _implantKeys = {};
 
-  // Warna aksen per kategori (selaras layar input kapten).
-  // Urutan: AWB HV → Koli HV → Ecer HV, masing-masing JKT/SEG/BTN.
   static const _takenSections = [
     {
       'title': 'AWB',
@@ -102,6 +103,11 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
 
   @override
   void dispose() {
+    _disposeCtrls();
+    super.dispose();
+  }
+
+  void _disposeCtrls() {
     for (final m in _takenCtrls.values) {
       for (final c in m.values) {
         c.dispose();
@@ -110,7 +116,6 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     for (final c in _catatanCtrls.values) {
       c.dispose();
     }
-    super.dispose();
   }
 
   @override
@@ -125,38 +130,66 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
 
   int _clamp0(int v) => v < 0 ? 0 : v;
 
-  /// Teks prefill: sisa > 0 tampil angka, sisa 0 tampil kosong (hint '0').
-  /// Parser (_takenInt) membaca string kosong sebagai 0, jadi submit tetap aman.
   String _prefillText(int v) => v > 0 ? '$v' : '';
 
   String _groupKey(String jenis, int ritKe) => '${jenis}__$ritKe';
 
-  /// Entri sisa grup (dari backend) berdasarkan jenis+rit.
-  Map<String, dynamic>? _sisaEntry(String jenis, int ritKe) {
-    for (final s in _sisaGrup) {
-      if (_str(s['jenis_ritase']) == jenis && _toInt(s['ritase_ke']) == ritKe) return s;
+  String _ctrlKey(int implantId, String groupKey) => '${implantId}__$groupKey';
+
+  int _pointOf(Map<String, dynamic> imp) {
+    final id = _toInt(imp['id_titik_implant']);
+    return id > 0 ? id : _toInt(imp['id_implant']);
+  }
+
+  String _pointNameOf(Map<String, dynamic> imp) {
+    final name = _str(imp['nama_titik_implant']);
+    return name.isNotEmpty ? name : _str(imp['nama_implant']);
+  }
+
+  Map<String, dynamic>? _implantOf(int id) {
+    for (final m in _implants) {
+      if (_toInt(m['id_implant']) == id) return m;
     }
     return null;
   }
 
-  /// Entri pending (input NULL) berdasarkan jenis+rit.
-  Map<String, dynamic>? _pendingEntry(String jenis, int ritKe) {
-    for (final p in _pending) {
-      if (_str(p['jenis_ritase']) == jenis && _toInt(p['ritase_ke']) == ritKe) return p;
-    }
-    return null;
+  List<Map<String, dynamic>> _pendingOf(int id) {
+    final p = _implantOf(id)?['pending'];
+    if (p is List) return List<Map<String, dynamic>>.from(p);
+    return [];
   }
 
-  /// Nilai sisa per metrik untuk pre-fill & visibilitas.
-  /// Prioritas: sisa backend → fallback total input pending.
-  int _sisaMetric(String groupKey, String jenis, int ritKe, String metricKey) {
-    final sisa = _sisaEntry(jenis, ritKe);
-    if (sisa != null) {
-      final sKey = metricKey == 'jumlah_awb' ? 'sisa_jumlah_awb' : 'sisa_$metricKey';
-      if (sisa.containsKey(sKey)) {
-        return _clamp0(_toInt(sisa[sKey]));
+  List<Map<String, dynamic>> _sisaGrupOf(int id) {
+    final s = _implantOf(id)?['sisa_grup'];
+    if (s is List) return List<Map<String, dynamic>>.from(s);
+    return [];
+  }
+
+  Map<String, dynamic>? _pendingEntry(int id, String jenis, int ritKe) {
+    for (final p in _pendingOf(id)) {
+      if (_str(p['jenis_ritase']) == jenis && _toInt(p['ritase_ke']) == ritKe) {
+        return p;
       }
-      // Fallback alias lama (data dari backend lama): jumlahkan agar tampil.
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _sisaEntry(int id, String jenis, int ritKe) {
+    for (final s in _sisaGrupOf(id)) {
+      if (_str(s['jenis_ritase']) == jenis && _toInt(s['ritase_ke']) == ritKe) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  int _sisaMetric(int id, String jenis, int ritKe, String metricKey) {
+    final sisa = _sisaEntry(id, jenis, ritKe);
+    if (sisa != null) {
+      final sKey = metricKey == 'jumlah_awb'
+          ? 'sisa_jumlah_awb'
+          : 'sisa_$metricKey';
+      if (sisa.containsKey(sKey)) return _clamp0(_toInt(sisa[sKey]));
       if (metricKey == 'awb_hv_jkt' && sisa.containsKey('sisa_awb_hv')) {
         return _clamp0(_toInt(sisa['sisa_awb_hv']));
       }
@@ -164,43 +197,75 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         return _clamp0(_toInt(sisa['sisa_koli_hv']));
       }
       if (metricKey == 'ecer_hv_jkt' &&
-          (sisa.containsKey('sisa_hv_awb') || sisa.containsKey('sisa_ecer_hv'))) {
-        return _clamp0(_toInt(sisa['sisa_hv_awb']) + _toInt(sisa['sisa_ecer_hv']));
+          (sisa.containsKey('sisa_hv_awb') ||
+              sisa.containsKey('sisa_ecer_hv'))) {
+        return _clamp0(
+          _toInt(sisa['sisa_hv_awb']) + _toInt(sisa['sisa_ecer_hv']),
+        );
       }
     }
-    final pending = _pendingEntry(jenis, ritKe);
+    final pending = _pendingEntry(id, jenis, ritKe);
     if (pending != null) {
-      if (metricKey == 'jumlah_awb') return _clamp0(_toInt(pending['total_awb']));
+      if (metricKey == 'jumlah_awb') {
+        return _clamp0(_toInt(pending['total_awb']));
+      }
       return _clamp0(_toInt(pending[metricKey]));
     }
     return 0;
   }
 
-  /// Daftar grup form: gabungan grup pending + grup bersisa.
-  /// Form tampil selama ada input NULL baru ATAU masih ada sisa.
+  int _groupTotal(int id, Map<String, dynamic> g, String metric) {
+    final sisa = _sisaEntry(id, g['jenis'] as String, g['ritKe'] as int);
+    return _clamp0(_toInt(sisa?['sisa_$metric']));
+  }
+
+  bool _implantHasContent(int id, String jenis, int ritKe) {
+    if (_pendingEntry(id, jenis, ritKe) != null) return true;
+    final sisa = _sisaEntry(id, jenis, ritKe);
+    if (sisa == null) return false;
+    if (_str(sisa['status_grup']) == 'selesai') return false;
+    return _toInt(sisa['sisa_awb']) > 0 ||
+        _toInt(sisa['sisa_koli']) > 0 ||
+        _toInt(sisa['sisa_ecer']) > 0 ||
+        _toInt(sisa['sisa_hv']) > 0;
+  }
+
   List<Map<String, dynamic>> _formGroups() {
     final seen = <String>{};
     final out = <Map<String, dynamic>>[];
-    void add(String jenis, int ritKe) {
+    void add(
+      Map<String, dynamic> imp,
+      String jenis,
+      int ritKe,
+      String tanggal,
+    ) {
+      final id = _toInt(imp['id_implant']);
+      if (jenis.isEmpty && ritKe == 0) return;
+      if (!_implantHasContent(id, jenis, ritKe)) return;
       final key = _groupKey(jenis, ritKe);
-      if (key.isEmpty || seen.contains(key)) return;
-      final pending = _pendingEntry(jenis, ritKe);
-      final sisa = _sisaEntry(jenis, ritKe);
-      final adaSisa = sisa != null &&
-          (_toInt(sisa['sisa_awb']) > 0 ||
-              _toInt(sisa['sisa_koli']) > 0 ||
-              _toInt(sisa['sisa_ecer']) > 0 ||
-              _toInt(sisa['sisa_hv']) > 0);
-      if (pending == null && !adaSisa) return;
+      if (seen.contains(key)) return;
       seen.add(key);
-      out.add({'key': key, 'jenis': jenis, 'ritKe': ritKe, 'pending': pending, 'sisa': sisa});
+      out.add({
+        'key': key,
+        'jenis': jenis,
+        'ritKe': ritKe,
+        'tanggalAsal': tanggal,
+      });
     }
 
-    for (final p in _pending) {
-      add(_str(p['jenis_ritase']), _toInt(p['ritase_ke']));
-    }
-    for (final s in _sisaGrup) {
-      add(_str(s['jenis_ritase']), _toInt(s['ritase_ke']));
+    for (final imp in _implants) {
+      final id = _toInt(imp['id_implant']);
+      for (final p in _pendingOf(id)) {
+        add(
+          imp,
+          _str(p['jenis_ritase']),
+          _toInt(p['ritase_ke']),
+          _str(p['tanggal_input']),
+        );
+      }
+      for (final s in _sisaGrupOf(id)) {
+        add(imp, _str(s['jenis_ritase']), _toInt(s['ritase_ke']), '');
+      }
     }
     out.sort((a, b) {
       final c = (a['ritKe'] as int).compareTo(b['ritKe'] as int);
@@ -209,6 +274,26 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     });
     return out;
   }
+
+  List<Map<String, dynamic>> _groupImplants(Map<String, dynamic> g) {
+    final jenis = g['jenis'] as String;
+    final ritKe = g['ritKe'] as int;
+    final out = <Map<String, dynamic>>[];
+    for (final imp in _implants) {
+      final id = _toInt(imp['id_implant']);
+      if (_implantHasContent(id, jenis, ritKe)) {
+        out.add({
+          'id_implant': id,
+          'id_titik_implant': _toInt(imp['id_titik_implant']),
+          'nama_implant': _str(imp['nama_implant']),
+          'nama_titik_implant': _pointNameOf(imp),
+        });
+      }
+    }
+    return out;
+  }
+
+  Set<int> _checkedIds(String key) => _checked[key] ?? <int>{};
 
   String _fmtTime(String? iso) {
     if (iso == null || iso.isEmpty) return '';
@@ -231,62 +316,55 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       _error = null;
     });
     try {
-      final results = await Future.wait([
-        ApiClient.fetchPendingConfirmations(),
-        ApiClient.fetchKaptenRitase(),
-        ApiClient.fetchKonfirmasiPenjemputan(),
-      ]);
+      final implants = await ApiClient.fetchBatchOverview();
       if (!mounted) return;
-      final pending = results[0] as List<Map<String, dynamic>>;
-      final riwayatData = results[2] as Map<String, dynamic>?;
-      final List<Map<String, dynamic>> sisaGrup = [];
-      final List<Map<String, dynamic>> riwayat = [];
-      if (riwayatData != null) {
-        final rw = riwayatData['riwayat'];
-        if (rw is List) riwayat.addAll(List<Map<String, dynamic>>.from(rw));
-        final sg = riwayatData['sisa_grup'];
-        if (sg is List) sisaGrup.addAll(List<Map<String, dynamic>>.from(sg));
-      }
-      // Reset + pre-fill controller diambil dari SISA (bukan total pending).
-      for (final m in _takenCtrls.values) {
-        for (final c in m.values) {
-          c.dispose();
-        }
-      }
+      _disposeCtrls();
       _takenCtrls.clear();
+      _catatanCtrls.clear();
+      _candidates.clear();
+      _candidateSeq.clear();
+      _selectedRitase.clear();
+      _checked.clear();
+      _handoverFoto.clear();
+      _uploadingFoto.clear();
       _groupKeys.clear();
+      _implantKeys.clear();
+
       setState(() {
-        _pending = pending;
-        _ritases = results[1] as List<Map<String, dynamic>>;
-        // Urutkan riwayat: Rit 1, 2, 3 — terbaru dulu di dalam rit yang sama.
-        riwayat.sort((a, b) {
-          final c = _toInt(a['ritase_ke']).compareTo(_toInt(b['ritase_ke']));
-          if (c != 0) return c;
-          return _str(b['created_at']).compareTo(_str(a['created_at']));
-        });
-        _riwayat = riwayat;
-        _sisaGrup = sisaGrup;
+        _implants = implants;
         _isLoading = false;
       });
-      // Prefill setelah state terisi (butuh _sisaGrup).
-      for (final g in _formGroups()) {
+
+      final groups = _formGroups();
+      for (final g in groups) {
         final key = g['key'] as String;
         final jenis = g['jenis'] as String;
         final ritKe = g['ritKe'] as int;
-        final map = <String, TextEditingController>{};
-        for (final section in _takenSections) {
-          for (final f in (section['fields'] as List)) {
-            final mkey = (f as Map)['key'] as String;
-            final c = TextEditingController(
-                text: _prefillText(_sisaMetric(key, jenis, ritKe, mkey)));
-            c.addListener(_onTakenChanged);
-            map[mkey] = c;
-          }
-        }
-        _takenCtrls[key] = map;
-        _catatanCtrls.putIfAbsent(key, () => TextEditingController());
+        _catatanCtrls[key] = TextEditingController();
         _groupKeys.putIfAbsent(key, () => GlobalKey());
+        final ids = <int>{};
+        for (final imp in _groupImplants(g)) {
+          final id = _toInt(imp['id_implant']);
+          ids.add(id);
+          final ck = _ctrlKey(id, key);
+          final map = <String, TextEditingController>{};
+          for (final section in _takenSections) {
+            for (final f in (section['fields'] as List)) {
+              final mkey = (f as Map)['key'] as String;
+              final c = TextEditingController(
+                text: _prefillText(_sisaMetric(id, jenis, ritKe, mkey)),
+              );
+              c.addListener(_onTakenChanged);
+              map[mkey] = c;
+            }
+          }
+          _takenCtrls[ck] = map;
+          _implantKeys.putIfAbsent(ck, () => GlobalKey());
+        }
+        _checked[key] = ids;
       }
+      await Future.wait(groups.map(_loadCandidates));
+      _loadHistory();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -296,27 +374,165 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     }
   }
 
-  /// Kandidat trip untuk satu grup (ritase_ke + jenis harus cocok).
-  List<Map<String, dynamic>> _candidatesFor(String jenis, int ritKe) {
-    return _ritases.where((r) {
-      if (_toInt(r['ritase_ke']) != ritKe) return false;
-      final rJenis = _str(r['jenis_ritase']);
-      if (jenis.isNotEmpty && rJenis.isNotEmpty && rJenis != jenis) return false;
-      return true;
-    }).toList();
+  Future<void> _loadHistory({bool showLoading = true}) async {
+    if (showLoading && mounted) setState(() => _historyLoading = true);
+    try {
+      final list = await ApiClient.fetchKaptenKonfirmasiHistory(
+        filter: _historyFilter,
+        idImplant: _historyImplant,
+      );
+      if (!mounted) return;
+      setState(() {
+        _history = list;
+        _historyLoading = false;
+        _historyError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _historyLoading = false;
+        _historyError = 'Gagal memuat riwayat: $e';
+      });
+    }
+  }
+
+  Future<void> _loadCandidates(Map<String, dynamic> g) async {
+    final key = g['key'] as String;
+    final seq = (_candidateSeq[key] ?? 0) + 1;
+    _candidateSeq[key] = seq;
+    final ids = _checkedIds(key).toList();
+    if (ids.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _candidates[key] = [];
+          _selectedRitase.remove(key);
+          _loadingCandidates[key] = false;
+        });
+      }
+      return;
+    }
+    setState(() => _loadingCandidates[key] = true);
+    try {
+      final jenis = g['jenis'] as String;
+      final ritKe = g['ritKe'] as int;
+      final pointIds = <int>{};
+      for (final imp in _groupImplants(g)) {
+        final id = _toInt(imp['id_implant']);
+        if (ids.contains(id)) pointIds.add(_pointOf(imp));
+      }
+      if (pointIds.isEmpty) {
+        if (!mounted || _candidateSeq[key] != seq) return;
+        setState(() {
+          _candidates[key] = [];
+          _selectedRitase.remove(key);
+          _loadingCandidates[key] = false;
+        });
+        return;
+      }
+      final lists = await Future.wait(
+        pointIds.map(
+          (pointId) => ApiClient.fetchBatchRitase(ids, titikId: pointId),
+        ),
+      );
+      bool matchesGroup(Map<String, dynamic> r) {
+        if (_toInt(r['ritase_ke']) != ritKe) return false;
+        final rJenis = _str(r['jenis_ritase']);
+        return jenis.isEmpty || rJenis.isEmpty || rJenis == jenis;
+      }
+
+      final filtered = lists
+          .map((list) => list.where(matchesGroup).toList())
+          .toList();
+      final counts = <int, int>{};
+      for (final list in filtered) {
+        final seen = <int>{};
+        for (final r in list) {
+          final id = _toInt(r['id_ritase']);
+          if (id > 0 && seen.add(id)) {
+            counts[id] = (counts[id] ?? 0) + 1;
+          }
+        }
+      }
+      final list = <Map<String, dynamic>>[];
+      final seenIds = <int>{};
+      for (final r in filtered.first) {
+        final id = _toInt(r['id_ritase']);
+        if (id > 0 && counts[id] == filtered.length && seenIds.add(id)) {
+          list.add(r);
+        }
+      }
+      if (!mounted || _candidateSeq[key] != seq) return;
+      setState(() {
+        _candidates[key] = list;
+        final cur = _selectedRitase[key];
+        if (cur == null || !list.any((r) => _toInt(r['id_ritase']) == cur)) {
+          _selectedRitase.remove(key);
+        }
+        _loadingCandidates[key] = false;
+      });
+    } catch (_) {
+      if (!mounted || _candidateSeq[key] != seq) return;
+      setState(() {
+        _candidates[key] = [];
+        _selectedRitase.remove(key);
+        _loadingCandidates[key] = false;
+      });
+    }
+  }
+
+  void _toggleImplant(Map<String, dynamic> g, int implantId, bool checked) {
+    final key = g['key'] as String;
+    final set = _checked.putIfAbsent(key, () => <int>{});
+    if (checked) {
+      set.add(implantId);
+      final ck = _ctrlKey(implantId, key);
+      if (!_takenCtrls.containsKey(ck)) {
+        final jenis = g['jenis'] as String;
+        final ritKe = g['ritKe'] as int;
+        final map = <String, TextEditingController>{};
+        for (final section in _takenSections) {
+          for (final f in (section['fields'] as List)) {
+            final mkey = (f as Map)['key'] as String;
+            final c = TextEditingController(
+              text: _prefillText(_sisaMetric(implantId, jenis, ritKe, mkey)),
+            );
+            c.addListener(_onTakenChanged);
+            map[mkey] = c;
+          }
+        }
+        _takenCtrls[ck] = map;
+        _implantKeys.putIfAbsent(ck, () => GlobalKey());
+      }
+    } else {
+      set.remove(implantId);
+    }
+    setState(() {});
+    _loadCandidates(g);
   }
 
   String _ritaseShortLabel(Map<String, dynamic> r) {
     final driver = _str(r['nama_driver']);
     final ritKe = _toInt(r['ritase_ke']);
     final nama = driver.isNotEmpty ? driver : 'Driver';
-    return ritKe > 0 ? '$nama • Rit $ritKe' : nama;
+    return ritKe > 0 ? '$nama \u2022 Rit $ritKe' : nama;
   }
 
-  /// Pangkas "HH:MM:SS" → "HH:MM" agar label ringkas.
   String _shortTime(String t) {
     final m = RegExp(r'^(\d{1,2}:\d{2})').firstMatch(t.trim());
     return m != null ? m.group(1)! : t;
+  }
+
+  String _tanggalLabel(String tgl) {
+    if (tgl.isEmpty) return '';
+    final d = DateTime.tryParse(tgl);
+    if (d == null) return '';
+    final now = DateTime.now().toUtc().add(const Duration(hours: 7));
+    if (d.year == now.year && d.month == now.month && d.day == now.day) {
+      return '';
+    }
+    final dd = d.day.toString().padLeft(2, '0');
+    final mm = d.month.toString().padLeft(2, '0');
+    return ' \u2022 $dd/$mm';
   }
 
   Future<void> _pickHandoverFoto(String key) async {
@@ -330,53 +546,79 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal ambil foto: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal ambil foto: $e')));
     }
   }
 
-  int _takenInt(String key, String metric) {
-    final t = _takenCtrls[key]?[metric]?.text ?? '0';
+  int _takenInt(String ctrlKey, String metric) {
+    final t = _takenCtrls[ctrlKey]?[metric]?.text ?? '0';
     final v = int.tryParse(t) ?? 0;
     return v < 0 ? 0 : v;
   }
 
-  /// Total semua kolom diambil dalam grup. Tombol konfirmasi aktif
-  /// hanya bila total > 0 (minimal satu angka terisi; foto tidak dihitung).
-  int _takenTotal(String key) {
-    final ctrls = _takenCtrls[key];
+  int _takenTotal(int implantId, String key) {
+    final ck = _ctrlKey(implantId, key);
+    final ctrls = _takenCtrls[ck];
     if (ctrls == null) return 0;
     var sum = 0;
     for (final mkey in ctrls.keys) {
-      sum += _takenInt(key, mkey);
+      sum += _takenInt(ck, mkey);
     }
     return sum;
   }
 
-  bool _canConfirm(String key) => _takenTotal(key) > 0;
+  bool _canConfirm(String key) {
+    if (_selectedRitase[key] == null) return false;
+    for (final id in _checkedIds(key)) {
+      if (_takenTotal(id, key) > 0) return true;
+    }
+    return false;
+  }
 
-  /// Refresh status tombol konfirmasi saat nilai diambil diketik.
   void _onTakenChanged() {
     if (mounted) setState(() {});
   }
 
-  Future<void> _confirm(String key, String jenis, int ritKe) async {
-    final idRitase = _selectedRitase[ritKe];
-    if (idRitase == null || _confirming.contains(ritKe)) return;
-    // Pertahanan: tolak kirim bila semua kolom diambil kosong/nol.
-    if (!_canConfirm(key)) {
+  Future<void> _confirm(Map<String, dynamic> g) async {
+    final key = g['key'] as String;
+    final jenis = g['jenis'] as String;
+    final ritKe = g['ritKe'] as int;
+    final tanggalAsal = _str(g['tanggalAsal']);
+    final idRitase = _selectedRitase[key];
+    if (idRitase == null || _confirming.contains(key)) return;
+
+    final items = <Map<String, dynamic>>[];
+    for (final id in _checkedIds(key)) {
+      final ck = _ctrlKey(id, key);
+      var total = 0;
+      final m = <String, dynamic>{'id_implant': id};
+      for (final section in _takenSections) {
+        for (final f in (section['fields'] as List)) {
+          final mkey = (f as Map)['key'] as String;
+          final v = _takenInt(ck, mkey);
+          total += v;
+          final payloadKey = mkey == 'jumlah_awb' ? 'awb' : mkey;
+          m['diambil_$payloadKey'] = v;
+        }
+      }
+      if (total > 0) items.add(m);
+    }
+
+    if (items.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Minimal isi salah satu jumlah yang diambil driver')),
+            content: Text('Minimal isi salah satu jumlah yang diambil driver'),
+          ),
         );
       }
       return;
     }
-    setState(() => _confirming.add(ritKe));
+
+    setState(() => _confirming.add(key));
     try {
-      // Upload foto serah terima dulu (opsional — gagal upload tidak menghalangi).
       String? fotoUrl;
       final fotoPath = _handoverFoto[key];
       if (fotoPath != null && fotoPath.isNotEmpty) {
@@ -385,50 +627,57 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
           fotoUrl = await ApiClient.uploadManifestPhoto(
             idRitase: 0,
             filePath: fotoPath,
-            namaLokasi: widget.implantName,
+            namaLokasi: widget.implantName.isNotEmpty
+                ? widget.implantName
+                : 'Gabungan',
           );
+        } catch (_) {
         } finally {
           if (mounted) setState(() => _uploadingFoto.remove(key));
         }
       }
 
-      final result = await ApiClient.confirmPickup(
+      final result = await ApiClient.confirmPickupBatch(
         jenisRitase: jenis.isEmpty ? 'outgoing' : jenis,
         ritaseKe: ritKe,
+        ritaseKeAsal: ritKe,
+        tanggalAsal: tanggalAsal.isEmpty ? null : tanggalAsal,
         idRitase: idRitase,
-        jumlahAwb: _takenInt(key, 'jumlah_awb'),
-        koliJkt: _takenInt(key, 'koli_jkt'),
-        koliSeg: _takenInt(key, 'koli_seg'),
-        koliBtn: _takenInt(key, 'koli_btn'),
-        ecerJkt: _takenInt(key, 'ecer_jkt'),
-        ecerSeg: _takenInt(key, 'ecer_seg'),
-        ecerBtn: _takenInt(key, 'ecer_btn'),
-        awbHvJkt: _takenInt(key, 'awb_hv_jkt'),
-        awbHvSeg: _takenInt(key, 'awb_hv_seg'),
-        awbHvBtn: _takenInt(key, 'awb_hv_btn'),
-        koliHvJkt: _takenInt(key, 'koli_hv_jkt'),
-        koliHvSeg: _takenInt(key, 'koli_hv_seg'),
-        koliHvBtn: _takenInt(key, 'koli_hv_btn'),
-        ecerHvJkt: _takenInt(key, 'ecer_hv_jkt'),
-        ecerHvSeg: _takenInt(key, 'ecer_hv_seg'),
-        ecerHvBtn: _takenInt(key, 'ecer_hv_btn'),
+        items: items,
         fotoPenjemputanUrl: fotoUrl,
-        catatan: _catatanCtrls[key]?.text.trim(),
+        catatan: _catatanCtrls[key]?.text.trim() ?? '',
       );
       if (!mounted) return;
       if (result != null) {
-        final sisa = result['sisa'] as Map<String, dynamic>?;
-        final sKoli = _toInt(sisa?['total_koli']);
-        final sEcer = _toInt(sisa?['total_ecer']);
-        final sHv = _toInt(sisa?['total_hv']);
-        final sAwb = _toInt(sisa?['jumlah_awb']);
+        var sAwb = 0, sKoli = 0, sEcer = 0, sHv = 0;
+        final resItems = result['items'];
+        if (resItems is List) {
+          for (final it in resItems) {
+            if (it is Map) {
+              final sisa = it['sisa'];
+              if (sisa is Map) {
+                sAwb += _toInt(sisa['sisa_awb']);
+                sKoli += _toInt(sisa['sisa_koli']);
+                sEcer += _toInt(sisa['sisa_ecer']);
+                sHv += _toInt(sisa['sisa_hv']);
+              } else {
+                sAwb += _toInt(it['sisa_awb']);
+              }
+            }
+          }
+        }
+        final n = resItems is List ? resItems.length : items.length;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Tersimpan! Sisa — $sAwb AWB, $sKoli koli, $sEcer ecer, $sHv HV.'),
+            content: Text(
+              n > 1
+                  ? 'Tersimpan! $n implant. Sisa \u2014 $sAwb AWB, $sKoli koli, $sEcer ecer, $sHv HV.'
+                  : 'Tersimpan! Sisa \u2014 $sAwb AWB, $sKoli koli, $sEcer ecer, $sHv HV.',
+            ),
             backgroundColor: const Color(0xFF16A34A),
           ),
         );
-        _selectedRitase.remove(ritKe);
+        _selectedRitase.remove(key);
         _handoverFoto.remove(key);
         _catatanCtrls[key]?.clear();
         await _load();
@@ -439,79 +688,23 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal konfirmasi: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Gagal konfirmasi: $e')));
     } finally {
-      if (mounted) setState(() => _confirming.remove(ritKe));
-    }
-  }
-
-  Map<String, dynamic>? _sisaFor(String jenis, int ritKe) => _sisaEntry(jenis, ritKe);
-
-  /// Kata urutan Indonesia untuk status penjemputan (1-10), selebihnya angka.
-  static const _urutanWords = {
-    1: 'pertama',
-    2: 'kedua',
-    3: 'ketiga',
-    4: 'keempat',
-    5: 'kelima',
-    6: 'keenam',
-    7: 'ketujuh',
-    8: 'kedelapan',
-    9: 'kesembilan',
-    10: 'kesepuluh',
-  };
-
-  String _urutanWord(int n) => _urutanWords[n] ?? 'ke-$n';
-
-  /// Nomor urut tiap baris riwayat dalam grupnya (dari yang paling awal),
-  /// id baris terakhir tiap grup, dan jumlah baris tiap grup.
-  /// Key grup: "jenis__rit".
-  Map<String, dynamic> _riwayatOrder() {
-    final groups = <String, List<Map<String, dynamic>>>{};
-    for (final r in _riwayat) {
-      final k = '${_str(r['jenis_ritase'])}__${_toInt(r['ritase_ke'])}';
-      groups.putIfAbsent(k, () => []).add(r);
-    }
-    final seqById = <int, int>{};
-    final latestIdByGroup = <String, int>{};
-    final countByGroup = <String, int>{};
-    for (final e in groups.entries) {
-      e.value.sort((a, b) {
-        final c = _str(a['created_at']).compareTo(_str(b['created_at']));
-        if (c != 0) return c;
-        return _toInt(a['id']).compareTo(_toInt(b['id']));
-      });
-      countByGroup[e.key] = e.value.length;
-      for (var i = 0; i < e.value.length; i++) {
-        final id = _toInt(e.value[i]['id']);
-        seqById[id] = i + 1;
-        if (i == e.value.length - 1) latestIdByGroup[e.key] = id;
-      }
-    }
-    return {
-      'seqById': seqById,
-      'latestIdByGroup': latestIdByGroup,
-      'countByGroup': countByGroup,
-    };
-  }
-
-  /// Scroll ke form grup (untuk tombol "Penjemputan kedua").
-  void _scrollToGroup(String key) {
-    final ctx = _groupKeys[key]?.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 400));
+      if (mounted) setState(() => _confirming.remove(key));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final groups = _isLoading || _error != null ? <Map<String, dynamic>>[] : _formGroups();
-    final order = _riwayatOrder();
-    final seqById = order['seqById'] as Map<int, int>;
-    final latestIdByGroup = order['latestIdByGroup'] as Map<String, int>;
-    final countByGroup = order['countByGroup'] as Map<String, int>;
+    final groups = _isLoading || _error != null
+        ? <Map<String, dynamic>>[]
+        : _formGroups();
+    final subtitle = widget.implantName.isNotEmpty
+        ? widget.implantName
+        : (_implants.length > 1 ? '${_implants.length} implant' : '');
+
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
       appBar: AppBar(
@@ -524,10 +717,14 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
               'Konfirmasi Pengambilan',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            if (widget.implantName.isNotEmpty)
+            if (subtitle.isNotEmpty)
               Text(
-                widget.implantName,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Colors.white70),
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.white70,
+                ),
               ),
           ],
         ),
@@ -539,99 +736,424 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF0D47A1)))
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFF0D47A1)),
+            )
           : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!, textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        ElevatedButton(onPressed: _load, child: const Text('Coba Lagi')),
-                      ],
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!, textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: _load,
+                      child: const Text('Coba Lagi'),
                     ),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (groups.isEmpty)
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFFE2E8F0)),
-                            ),
-                            child: const Column(
-                              children: [
-                                Icon(Icons.check_circle_outline_rounded, size: 48, color: Color(0xFF16A34A)),
-                                SizedBox(height: 8),
-                                Text(
-                                  'Tidak ada sisa maupun input baru',
-                                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          ...groups.map(_buildGroupCard),
-                        if (_riwayat.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Pengambilan Hari Ini',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
-                          ),
-                          const SizedBox(height: 8),
-                          ..._riwayat.map((item) {
-                            final key =
-                                '${_str(item['jenis_ritase'])}__${_toInt(item['ritase_ke'])}';
-                            final id = _toInt(item['id']);
-                            return _buildRiwayatCard(
-                              item,
-                              seqById[id] ?? 1,
-                              latestIdByGroup[key] == id,
-                              (countByGroup[key] ?? 0) + 1,
-                            );
-                          }),
-                        ],
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
+              ),
+            )
+          : IndexedStack(
+              index: _tabIndex,
+              children: [_buildKonfirmasiTab(groups), _buildRiwayatTab()],
+            ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tabIndex,
+        backgroundColor: Colors.white,
+        indicatorColor: const Color(0xFFDBEAFE),
+        onDestinationSelected: (i) {
+          setState(() => _tabIndex = i);
+          if (i == 1) _loadHistory(showLoading: _history.isEmpty);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.fact_check_outlined),
+            selectedIcon: Icon(
+              Icons.fact_check_rounded,
+              color: Color(0xFF0D47A1),
+            ),
+            label: 'Konfirmasi',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history_rounded),
+            selectedIcon: Icon(Icons.history_rounded, color: Color(0xFF0D47A1)),
+            label: 'Riwayat',
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildGroupCard(Map<String, dynamic> g) {
+  Widget _buildKonfirmasiTab(List<Map<String, dynamic>> groups) {
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (groups.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: const Column(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline_rounded,
+                      size: 48,
+                      color: Color(0xFF16A34A),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Tidak ada sisa maupun input baru',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...groups.map(_buildGroup),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRiwayatTab() {
+    final filterItems = const [
+      ['today', 'Hari Ini'],
+      ['week', '7 Hari'],
+      ['month', 'Bulan Ini'],
+      ['all', 'Semua'],
+    ];
+    return RefreshIndicator(
+      onRefresh: () => _loadHistory(),
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: filterItems.map((f) {
+                final selected = _historyFilter == f[0];
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(f[1]),
+                    selected: selected,
+                    onSelected: (_) {
+                      if (_historyFilter == f[0]) return;
+                      setState(() => _historyFilter = f[0]);
+                      _loadHistory();
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          if (_implants.length > 1) ...[
+            const SizedBox(height: 10),
+            DropdownButtonFormField<int>(
+              key: ValueKey('history_implant_${_historyImplant ?? 0}'),
+              initialValue: _historyImplant ?? 0,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Filter implant',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+              ),
+              items: [
+                const DropdownMenuItem(value: 0, child: Text('Semua implant')),
+                ..._implants.map((imp) {
+                  final id = _toInt(imp['id_implant']);
+                  return DropdownMenuItem(
+                    value: id,
+                    child: Text(
+                      _str(imp['nama_implant']),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  );
+                }),
+              ],
+              onChanged: (v) {
+                setState(() => _historyImplant = (v ?? 0) > 0 ? v : null);
+                _loadHistory();
+              },
+            ),
+          ],
+          const SizedBox(height: 12),
+          if (_historyLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(
+                child: CircularProgressIndicator(color: Color(0xFF0D47A1)),
+              ),
+            )
+          else if (_historyError != null)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF2F2),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFFECACA)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    _historyError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFFB91C1C)),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () => _loadHistory(),
+                    child: const Text('Coba Lagi'),
+                  ),
+                ],
+              ),
+            )
+          else if (_history.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: const Column(
+                children: [
+                  Icon(
+                    Icons.history_rounded,
+                    size: 44,
+                    color: Color(0xFF94A3B8),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Belum ada riwayat konfirmasi',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF0F172A),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            ..._history.map(_buildHistoryCard),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGroup(Map<String, dynamic> g) {
+    final key = g['key'] as String;
+    final implants = _groupImplants(g);
+    if (implants.length <= 1) {
+      return _buildSingleCard(g, implants.isEmpty ? null : implants.first);
+    }
+    final busy = _confirming.contains(key);
+    return Column(
+      key: _groupKeys.putIfAbsent(key, () => GlobalKey()),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildGroupHeader(g, implants, busy),
+        const SizedBox(height: 10),
+        ...implants.map((imp) => _buildImplantCard(g, imp, busy)),
+        _buildGroupFooter(g, busy, implants.length),
+      ],
+    );
+  }
+
+  Widget _cardBox({
+    required Widget child,
+    Color border = const Color(0xFFBFDBFE),
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: border),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0D47A1).withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildGroupHeader(
+    Map<String, dynamic> g,
+    List<Map<String, dynamic>> implants,
+    bool busy,
+  ) {
     final key = g['key'] as String;
     final jenis = g['jenis'] as String;
     final ritKe = g['ritKe'] as int;
-    final pending = g['pending'] as Map<String, dynamic>?;
-    final sisa = g['sisa'] as Map<String, dynamic>?;
-    final count = pending != null ? _toInt(pending['jumlah_input']) : 0;
-    final sAwb = _toInt(sisa?['sisa_awb']);
-    final sKoli = _toInt(sisa?['sisa_koli']);
-    final sEcer = _toInt(sisa?['sisa_ecer']);
-    final sHv = _toInt(sisa?['sisa_hv']);
-    final candidates = _candidatesFor(jenis, ritKe);
-    final selected = _selectedRitase[ritKe];
-    final busy = _confirming.contains(ritKe);
-    final fotoPath = _handoverFoto[key];
-    final uploading = _uploadingFoto.contains(key);
-    // Seksi diambil yang terlihat: hanya metrik dengan sisa > 0.
-    final visibleSections = _takenSections.where((section) {
-      final fields = (section['fields'] as List).cast<Map<String, String>>();
-      return fields.any((f) => _sisaMetric(key, jenis, ritKe, f['key']!) > 0);
-    }).toList();
+    final checked = _checkedIds(key);
+    final sumber = checked.isEmpty
+        ? implants
+        : implants
+              .where((imp) => checked.contains(_toInt(imp['id_implant'])))
+              .toList();
+    var awb = 0, koli = 0, ecer = 0, hv = 0;
+    for (final imp in sumber) {
+      final id = _toInt(imp['id_implant']);
+      awb += _groupTotal(id, g, 'awb');
+      koli += _groupTotal(id, g, 'koli');
+      ecer += _groupTotal(id, g, 'ecer');
+      hv += _groupTotal(id, g, 'hv');
+    }
+    var totalPending = 0;
+    for (final imp in implants) {
+      final p = _pendingEntry(_toInt(imp['id_implant']), jenis, ritKe);
+      totalPending += _toInt(p?['jumlah_input']);
+    }
+    final pointNames = implants
+        .map(_pointNameOf)
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final pointLabel = pointNames.isEmpty
+        ? 'Titik penjemputan'
+        : pointNames.length == 1
+        ? 'Titik: ${pointNames.first}'
+        : '${pointNames.length} titik penjemputan';
+
+    return _cardBox(
+      border: const Color(0xFFBFDBFE),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0D47A1), Color(0xFF2563EB)],
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Rit $ritKe',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  checked.isEmpty
+                      ? 'Pilih implant yang ikut dijemput'
+                      : '${checked.length} dari ${implants.length} implant dipilih'
+                            '${totalPending > 0 ? ' \u2022 $totalPending input baru' : ''}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF475569),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on_rounded,
+                size: 14,
+                color: Color(0xFF2563EB),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  pointLabel,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1E40AF),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              _statChip(
+                'Sisa: $awb AWB',
+                const Color(0xFFEDE9FE),
+                const Color(0xFF6D28D9),
+              ),
+              _statChip(
+                '$koli Koli',
+                const Color(0xFFDBEAFE),
+                const Color(0xFF1E40AF),
+              ),
+              _statChip(
+                '$ecer Ecer',
+                const Color(0xFFFEF9C3),
+                const Color(0xFF854D0E),
+              ),
+              _statChip(
+                '$hv HV',
+                const Color(0xFFFEF3C7),
+                const Color(0xFFB45309),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildDriverDropdown(g, busy),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSingleCard(Map<String, dynamic> g, Map<String, dynamic>? imp) {
+    final key = g['key'] as String;
+    final jenis = g['jenis'] as String;
+    final ritKe = g['ritKe'] as int;
+    final busy = _confirming.contains(key);
+    final id = imp == null ? 0 : _toInt(imp['id_implant']);
+    final pending = _pendingEntry(id, jenis, ritKe);
+    final sisa = _sisaEntry(id, jenis, ritKe);
+    final count = _toInt(pending?['jumlah_input']);
 
     return Container(
       key: _groupKeys.putIfAbsent(key, () => GlobalKey()),
@@ -655,7 +1177,10 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
                     colors: [Color(0xFF0D47A1), Color(0xFF2563EB)],
@@ -664,7 +1189,11 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                 ),
                 child: Text(
                   'Rit $ritKe',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -673,227 +1202,540 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                   pending != null
                       ? '$count input belum terkonfirmasi'
                       : 'Sisa dari pengambilan sebelumnya',
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF475569), fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF475569),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on_rounded,
+                size: 14,
+                color: Color(0xFF2563EB),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Titik: ${imp == null ? '-' : _pointNameOf(imp)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1E40AF),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (imp != null && _implants.length > 1) ...[
+            const SizedBox(height: 6),
+            Text(
+              _str(imp['nama_implant']),
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 4,
             children: [
-              _statChip('Sisa: $sAwb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
-              _statChip('$sKoli Koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
-              _statChip('$sEcer Ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
-              _statChip('$sHv HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
+              _statChip(
+                'Sisa: ${_toInt(sisa?['sisa_awb'])} AWB',
+                const Color(0xFFEDE9FE),
+                const Color(0xFF6D28D9),
+              ),
+              _statChip(
+                '${_toInt(sisa?['sisa_koli'])} Koli',
+                const Color(0xFFDBEAFE),
+                const Color(0xFF1E40AF),
+              ),
+              _statChip(
+                '${_toInt(sisa?['sisa_ecer'])} Ecer',
+                const Color(0xFFFEF9C3),
+                const Color(0xFF854D0E),
+              ),
+              _statChip(
+                '${_toInt(sisa?['sisa_hv'])} HV',
+                const Color(0xFFFEF3C7),
+                const Color(0xFFB45309),
+              ),
             ],
           ),
           const SizedBox(height: 12),
-          if (candidates.isEmpty)
+          _buildDriverDropdown(g, busy),
+          const SizedBox(height: 12),
+          if (imp != null) ...[
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFEF9C3),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFDE047)),
+              key: _implantKeys.putIfAbsent(
+                _ctrlKey(id, key),
+                () => GlobalKey(),
               ),
-              child: const Text(
-                'Driver belum ditugaskan untuk mengambil muatan.',
-                style: TextStyle(fontSize: 12, color: Color(0xFF854D0E)),
-              ),
-            )
-          else ...[
-            const Text(
-              'Driver yang datang mengambil:',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
             ),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<int>(
-              initialValue: selected,
-              isExpanded: true,
-              decoration: InputDecoration(
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-              hint: const Text('Pilih driver...', style: TextStyle(fontSize: 13)),
-              items: candidates.map((r) {
-                final id = _toInt(r['id_ritase']);
-                final driver = _str(r['nama_driver']).isEmpty ? 'Driver' : _str(r['nama_driver']);
-                final rKe = _toInt(r['ritase_ke']);
-                final kode = _str(r['kode_ritase']);
-                final jamMulai = _shortTime(_str(r['jam_mulai']));
-                final jamSelesai = _shortTime(_str(r['jam_selesai']));
-                final plat = _str(r['plat_nomor']);
-                final jam = (jamMulai.isNotEmpty && jamSelesai.isNotEmpty) ? ' • $jamMulai-$jamSelesai' : '';
-                final nopol = plat.isNotEmpty && plat != '-' ? ' • $plat' : '';
-                return DropdownMenuItem<int>(
-                  value: id,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        rKe > 0 ? '$driver • Rit $rKe' : driver,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (kode.isNotEmpty || jam.isNotEmpty || nopol.isNotEmpty)
-                        Text(
-                          '$kode$jam$nopol',
-                          style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                    ],
-                  ),
-                );
-              }).toList(),
-              selectedItemBuilder: (context) {
-                return candidates.map((r) {
-                  return Text(
-                    _ritaseShortLabel(r),
-                    style: const TextStyle(fontSize: 13),
-                    overflow: TextOverflow.ellipsis,
-                  );
-                }).toList();
-              },
-              onChanged: busy
-                  ? null
-                  : (v) => setState(() {
-                        if (v != null) _selectedRitase[ritKe] = v;
-                      }),
-            ),
-            const SizedBox(height: 12),
-            if (visibleSections.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0FDF4),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFBBF7D0)),
-                ),
-                child: const Text(
-                  'Tidak ada sisa barang — semua sudah diambil driver.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF15803D)),
-                ),
-              )
-            else ...[
-              const Text(
-                'Jumlah yang diambil driver:',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
-              ),
-              const SizedBox(height: 2),
-              const Text(
-                'Hanya kolom yang bersisa yang tampil.',
-                style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-              ),
-              const SizedBox(height: 6),
-              ...visibleSections.map((section) => _buildTakenSection(
-                    key,
-                    (section['title'] as String?) ?? '',
-                    ((section['fields'] as List?) ?? []).cast<Map<String, String>>(),
-                    busy,
-                    Color((section['color'] as int?) ?? 0xFF0D47A1),
-                  )),
-            ],
-            const SizedBox(height: 8),
-            // Foto bukti serah terima (opsional)
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: (busy || uploading) ? null : () => _pickHandoverFoto(key),
-                    icon: const Icon(Icons.camera_alt_rounded, size: 16),
-                    label: Text(
-                      fotoPath != null ? 'Ganti Foto' : 'Foto Bukti (opsional)',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                ),
-                if (fotoPath != null) ...[
-                  const SizedBox(width: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(
-                      File(fotoPath),
-                      width: 56, height: 56, fit: BoxFit.cover,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Catatan sisa (opsional)
-            TextField(
-              controller: _catatanCtrls[key],
-              enabled: !busy,
-              maxLines: 2,
-              minLines: 1,
-              decoration: InputDecoration(
-                hintText: 'Catatan sisa, mis: 40 koli tidak muat...',
-                hintStyle: const TextStyle(fontSize: 12),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-              style: const TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            Builder(
-              builder: (context) {
-                final enabled = selected != null && !busy && _canConfirm(key);
-                final labelColor =
-                    enabled ? Colors.white : const Color(0xFF94A3B8);
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!enabled && !busy)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 6),
-                        
-                      ),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF16A34A),
-                          disabledBackgroundColor: const Color(0xFFE2E8F0),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: enabled ? () => _confirm(key, jenis, ritKe) : null,
-                        icon: busy
-                            ? const SizedBox(
-                                width: 16, height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                            : Icon(Icons.check_rounded, color: labelColor),
-                        label: Text(
-                          busy ? 'Menyimpan...' : 'Konfirmasi Driver',
-                          style: TextStyle(color: labelColor, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+            ..._buildTakenForm(id, key, jenis, ritKe, busy),
           ],
+          _buildPhotoNote(key, busy),
+          const SizedBox(height: 10),
+          _buildConfirmButton(g, busy, 1),
         ],
       ),
     );
   }
 
-  Widget _buildTakenSection(String groupKey, String title, List<Map<String, String>> fields, bool busy, Color accent) {
-    // Tampilkan hanya field yang sisanya > 0.
-    final visible = fields.where((f) {
-      final parts = groupKey.split('__');
-      final jenis = parts.isNotEmpty ? parts[0] : '';
-      final ritKe = parts.length > 1 ? (int.tryParse(parts[1]) ?? 0) : 0;
-      return _sisaMetric(groupKey, jenis, ritKe, f['key']!) > 0;
+  Widget _buildImplantCard(
+    Map<String, dynamic> g,
+    Map<String, dynamic> imp,
+    bool busy,
+  ) {
+    final key = g['key'] as String;
+    final jenis = g['jenis'] as String;
+    final ritKe = g['ritKe'] as int;
+    final id = _toInt(imp['id_implant']);
+    final checked = _checkedIds(key).contains(id);
+    final pending = _pendingEntry(id, jenis, ritKe);
+    final awb = _groupTotal(id, g, 'awb');
+    final koli = _groupTotal(id, g, 'koli');
+    final ecer = _groupTotal(id, g, 'ecer');
+    final hv = _groupTotal(id, g, 'hv');
+
+    return Container(
+      key: _implantKeys.putIfAbsent(_ctrlKey(id, key), () => GlobalKey()),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: checked ? const Color(0xFF2563EB) : const Color(0xFFE2E8F0),
+          width: checked ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Checkbox(
+                value: checked,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onChanged: busy
+                    ? null
+                    : (v) => _toggleImplant(g, id, v ?? false),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _str(imp['nama_implant']),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Titik: ${_pointNameOf(imp)}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (pending != null)
+                Text(
+                  '${_toInt(pending['jumlah_input'])} input',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              _statChip(
+                'Sisa: $awb AWB',
+                const Color(0xFFEDE9FE),
+                const Color(0xFF6D28D9),
+              ),
+              _statChip(
+                '$koli Koli',
+                const Color(0xFFDBEAFE),
+                const Color(0xFF1E40AF),
+              ),
+              _statChip(
+                '$ecer Ecer',
+                const Color(0xFFFEF9C3),
+                const Color(0xFF854D0E),
+              ),
+              _statChip(
+                '$hv HV',
+                const Color(0xFFFEF3C7),
+                const Color(0xFFB45309),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (!checked)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: const Text(
+                'Centang untuk ikut dijemput driver.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+              ),
+            )
+          else
+            ..._buildTakenForm(id, key, jenis, ritKe, busy),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildTakenForm(
+    int implantId,
+    String key,
+    String jenis,
+    int ritKe,
+    bool busy,
+  ) {
+    final ck = _ctrlKey(implantId, key);
+    final visibleSections = _takenSections.where((section) {
+      final fields = (section['fields'] as List).cast<Map<String, String>>();
+      return fields.any(
+        (f) => _sisaMetric(implantId, jenis, ritKe, f['key']!) > 0,
+      );
     }).toList();
-    if (visible.isEmpty) return const SizedBox.shrink();
+    if (visibleSections.isEmpty) {
+      return [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF0FDF4),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFBBF7D0)),
+          ),
+          child: const Text(
+            'Tidak ada sisa barang \u2014 semua sudah diambil driver.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF15803D)),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ];
+    }
+    return [
+      const Text(
+        'Jumlah yang diambil driver:',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF334155),
+        ),
+      ),
+      const SizedBox(height: 2),
+      const Text(
+        'Hanya kolom yang bersisa yang tampil.',
+        style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+      ),
+      const SizedBox(height: 6),
+      ...visibleSections.map(
+        (section) => _buildTakenSection(
+          ck,
+          (section['title'] as String?) ?? '',
+          ((section['fields'] as List?) ?? []).cast<Map<String, String>>(),
+          busy,
+          Color((section['color'] as int?) ?? 0xFF0D47A1),
+        ),
+      ),
+    ];
+  }
+
+  Widget _buildDriverDropdown(Map<String, dynamic> g, bool busy) {
+    final key = g['key'] as String;
+    final loading = _loadingCandidates[key] ?? false;
+    final candidates = _candidates[key] ?? [];
+    final selected = _selectedRitase[key];
+
+    if (loading) {
+      return const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 8),
+          Text(
+            'Memuat driver...',
+            style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+          ),
+        ],
+      );
+    }
+    if (candidates.isEmpty) {
+      final pesan = _checkedIds(key).isEmpty
+          ? 'Centang implant yang dijemput untuk melihat driver.'
+          : 'Driver belum ditugaskan untuk mengambil muatan.';
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF9C3),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFDE047)),
+        ),
+        child: Text(
+          pesan,
+          style: const TextStyle(fontSize: 12, color: Color(0xFF854D0E)),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Driver yang datang mengambil:',
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF334155),
+          ),
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<int>(
+          key: ValueKey('${key}__${selected ?? 0}'),
+          initialValue: selected,
+          isExpanded: true,
+          decoration: InputDecoration(
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
+          ),
+          hint: const Text('Pilih driver...', style: TextStyle(fontSize: 13)),
+          items: candidates.map((r) {
+            final id = _toInt(r['id_ritase']);
+            final driver = _str(r['nama_driver']).isEmpty
+                ? 'Driver'
+                : _str(r['nama_driver']);
+            final rKe = _toInt(r['ritase_ke']);
+            final kode = _str(r['kode_ritase']);
+            final jamMulai = _shortTime(_str(r['jam_mulai']));
+            final jamSelesai = _shortTime(_str(r['jam_selesai']));
+            final plat = _str(r['plat_nomor']);
+            final jam = (jamMulai.isNotEmpty && jamSelesai.isNotEmpty)
+                ? ' \u2022 $jamMulai-$jamSelesai'
+                : '';
+            final nopol = plat.isNotEmpty && plat != '-' ? ' \u2022 $plat' : '';
+            final tgl = _tanggalLabel(_str(r['tanggal']));
+            return DropdownMenuItem<int>(
+              value: id,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    rKe > 0 ? '$driver \u2022 Rit $rKe' : driver,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (kode.isNotEmpty ||
+                      jam.isNotEmpty ||
+                      nopol.isNotEmpty ||
+                      tgl.isNotEmpty)
+                    Text(
+                      '$kode$jam$nopol$tgl',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF64748B),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            );
+          }).toList(),
+          selectedItemBuilder: (context) {
+            return candidates.map((r) {
+              return Text(
+                _ritaseShortLabel(r),
+                style: const TextStyle(fontSize: 13),
+                overflow: TextOverflow.ellipsis,
+              );
+            }).toList();
+          },
+          onChanged: busy
+              ? null
+              : (v) => setState(() {
+                  if (v != null) {
+                    _selectedRitase[key] = v;
+                  } else {
+                    _selectedRitase.remove(key);
+                  }
+                }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGroupFooter(Map<String, dynamic> g, bool busy, int total) {
+    final key = g['key'] as String;
+    final n = _checkedIds(key).length;
+    return _cardBox(
+      border: const Color(0xFFE2E8F0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            n == 0
+                ? 'Belum ada implant yang dipilih'
+                : 'Bukti serah terima \u2022 $n dari $total implant',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF0F172A),
+            ),
+          ),
+          _buildPhotoNote(key, busy),
+          const SizedBox(height: 10),
+          _buildConfirmButton(g, busy, n),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoNote(String key, bool busy) {
+    final fotoPath = _handoverFoto[key];
+    final uploading = _uploadingFoto.contains(key);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: (busy || uploading)
+                    ? null
+                    : () => _pickHandoverFoto(key),
+                icon: const Icon(Icons.camera_alt_rounded, size: 16),
+                label: Text(
+                  fotoPath != null ? 'Ganti Foto' : 'Foto Bukti (opsional)',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+            if (fotoPath != null) ...[
+              const SizedBox(width: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(
+                  File(fotoPath),
+                  width: 56,
+                  height: 56,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _catatanCtrls.putIfAbsent(
+            key,
+            () => TextEditingController(),
+          ),
+          enabled: !busy,
+          maxLines: 2,
+          minLines: 1,
+          decoration: InputDecoration(
+            hintText: 'Catatan sisa, mis: 40 koli tidak muat...',
+            hintStyle: const TextStyle(fontSize: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
+          ),
+          style: const TextStyle(fontSize: 13),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConfirmButton(Map<String, dynamic> g, bool busy, int n) {
+    final key = g['key'] as String;
+    final enabled = _canConfirm(key) && !busy;
+    final labelColor = enabled ? Colors.white : const Color(0xFF94A3B8);
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF16A34A),
+          disabledBackgroundColor: const Color(0xFFE2E8F0),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        onPressed: enabled ? () => _confirm(g) : null,
+        icon: busy
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : Icon(Icons.check_rounded, color: labelColor),
+        label: Text(
+          busy
+              ? 'Menyimpan...'
+              : (n > 1
+                    ? 'Konfirmasi Driver ($n implant)'
+                    : 'Konfirmasi Driver'),
+          style: TextStyle(color: labelColor, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTakenSection(
+    String ctrlKey,
+    String title,
+    List<Map<String, String>> fields,
+    bool busy,
+    Color accent,
+  ) {
+    if (fields.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
@@ -904,25 +1746,32 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
               Container(
                 width: 8,
                 height: 8,
-                decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                ),
               ),
               const SizedBox(width: 6),
               Text(
                 title,
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: accent),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: accent,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 4),
           Row(
-            children: visible.map((f) {
+            children: fields.map((f) {
               final mkey = f['key']!;
               final label = f['label']!;
               return Expanded(
                 child: Padding(
-                  padding: EdgeInsets.only(right: f == visible.last ? 0 : 8),
+                  padding: EdgeInsets.only(right: f == fields.last ? 0 : 8),
                   child: TextField(
-                    controller: _takenCtrls[groupKey]?[mkey],
+                    controller: _takenCtrls[ctrlKey]?[mkey],
                     enabled: !busy,
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -940,16 +1789,26 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                       fillColor: accent.withValues(alpha: 0.06),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: accent.withValues(alpha: 0.35)),
+                        borderSide: BorderSide(
+                          color: accent.withValues(alpha: 0.35),
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: BorderSide(color: accent, width: 1.5),
                       ),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 10,
+                      ),
                     ),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               );
@@ -960,29 +1819,32 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
     );
   }
 
-  /// Kartu riwayat serah terima.
-  /// [seq] = nomor urut dalam grup (1 = pertama). [isLatest] = baris terbaru
-  /// grupnya — hanya di sinilah tombol penjemputan berikutnya tampil (bila
-  /// masih bersisa), berlabel [nextNum] ("kedua", "ketiga", ...).
-  Widget _buildRiwayatCard(Map<String, dynamic> item, int seq, bool isLatest, int nextNum) {
-    final jenis = _str(item['jenis_ritase']);
-    final ritKe = _toInt(item['ritase_ke']);
-    final key = _groupKey(jenis, ritKe);
+  Widget _buildHistoryCard(Map<String, dynamic> item) {
+    final status = _str(item['status']);
+    final isLate = status == 'terlambat';
+    final isMissed = status == 'terlewat' || isLate;
+    final color = isMissed ? const Color(0xFFDC2626) : const Color(0xFF16A34A);
+    final bg = isMissed ? const Color(0xFFFEF2F2) : const Color(0xFFF0FDF4);
+    final label = isLate
+        ? 'Terlambat diambil'
+        : isMissed
+        ? 'Terlambat'
+        : 'Diambil';
+    final asal = _toInt(item['ritase_ke']);
+    final aktual = _toInt(item['ritase_ke_aktual']);
     final driver = _str(item['nama_driver']);
     final kode = _str(item['kode_ritase']);
+    final implant = _str(item['nama_implant']);
+    final tgl = _str(item['tanggal_aktual']).isNotEmpty
+        ? _str(item['tanggal_aktual'])
+        : _str(item['tanggal_input']);
     final waktu = _fmtTime(_str(item['created_at']));
-    final awb = _toInt(item['jumlah_awb']);
+    final awb = _toInt(item['jumlah_awb'] ?? item['total_awb']);
     final koli = _toInt(item['total_koli']);
     final ecer = _toInt(item['total_ecer']);
     final hv = _toInt(item['total_hv']);
     final foto = _str(item['foto_penjemputan_url']);
     final catatan = _str(item['catatan']);
-    final sisa = _sisaFor(jenis, ritKe);
-    final sisaKoli = _toInt(sisa?['sisa_koli']);
-    final sisaEcer = _toInt(sisa?['sisa_ecer']);
-    final sisaHv = _toInt(sisa?['sisa_hv']);
-    final sisaAwb = _toInt(sisa?['sisa_awb']);
-    final adaSisa = sisaKoli > 0 || sisaEcer > 0 || sisaHv > 0 || sisaAwb > 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -990,66 +1852,99 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: color.withValues(alpha: 0.35)),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '${driver.isEmpty ? 'Driver' : driver} • Rit $ritKe',
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                  driver.isEmpty ? 'Driver' : driver,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF0F172A),
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (waktu.isNotEmpty)
-                Text(waktu, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), fontFamily: 'monospace')),
+                Text(
+                  waktu,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF64748B),
+                    fontFamily: 'monospace',
+                  ),
+                ),
             ],
           ),
-          if (kode.isNotEmpty)
-            Text(kode, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFFBFDBFE)),
-            ),
-            child: Text(
-              'Penjemputan ${_urutanWord(seq)}',
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF1D4ED8)),
+          const SizedBox(height: 4),
+          Text(
+            isLate
+                ? 'Rit $asal \u2192 Rit $aktual'
+                : isMissed
+                ? 'Rit $asal${tgl.isNotEmpty ? ' \u2022 ${_tanggalLabel(tgl)}' : ''} \u2022 belum diambil'
+                : 'Rit $asal',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: color,
             ),
           ),
+          if (implant.isNotEmpty)
+            Text(
+              'Implant: $implant',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF475569)),
+            ),
+          if (kode.isNotEmpty || tgl.isNotEmpty)
+            Text(
+              '$kode${tgl.isNotEmpty ? ' \u2022 $tgl' : ''}',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+            ),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
             runSpacing: 4,
             children: [
-              _statChip('Diambil: $awb AWB', const Color(0xFFEDE9FE), const Color(0xFF6D28D9)),
-              _statChip('$koli koli', const Color(0xFFDBEAFE), const Color(0xFF1E40AF)),
-              _statChip('$ecer ecer', const Color(0xFFFEF9C3), const Color(0xFF854D0E)),
-              _statChip('$hv HV', const Color(0xFFFEF3C7), const Color(0xFFB45309)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: adaSisa ? const Color(0xFFFEF2F2) : const Color(0xFFF0FDF4),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: adaSisa ? const Color(0xFFFECACA) : const Color(0xFFBBF7D0),
-                  ),
-                ),
-                child: Text(
-                  adaSisa
-                      ? 'Sisa: $sisaAwb AWB, $sisaKoli koli, $sisaEcer ecer, $sisaHv HV'
-                      : 'Habis terambil',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: adaSisa ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
-                  ),
-                ),
+              _statChip(
+                '$awb AWB',
+                const Color(0xFFEDE9FE),
+                const Color(0xFF6D28D9),
+              ),
+              _statChip(
+                '$koli koli',
+                const Color(0xFFDBEAFE),
+                const Color(0xFF1E40AF),
+              ),
+              _statChip(
+                '$ecer ecer',
+                const Color(0xFFFEF9C3),
+                const Color(0xFF854D0E),
+              ),
+              _statChip(
+                '$hv HV',
+                const Color(0xFFFEF3C7),
+                const Color(0xFFB45309),
               ),
             ],
           ),
@@ -1063,40 +1958,26 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                '📝 $catatan',
-                style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Color(0xFF475569)),
+                catatan,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                  color: Color(0xFF475569),
+                ),
               ),
             ),
           ],
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              if (foto.isNotEmpty)
-                OutlinedButton.icon(
-                  onPressed: () => _showFotoDialog(foto),
-                  icon: const Icon(Icons.photo_rounded, size: 16),
-                  label: const Text('Lihat Foto Bukti', style: TextStyle(fontSize: 12)),
-                ),
-              if (foto.isNotEmpty && adaSisa && isLatest) const SizedBox(width: 8),
-              // Tombol penjemputan berikutnya: hanya di kartu TERAKHIR tiap grup
-              // dan hanya bila grup masih bersisa. Label mengikuti nomor berikut.
-              if (adaSisa && isLatest)
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0D47A1),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: () => _scrollToGroup(key),
-                    icon: const Icon(Icons.add_rounded, size: 16, color: Colors.white),
-                    label: Text(
-                      'Penjemputan ${_urutanWord(nextNum)}',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+          if (foto.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: () => _showFotoDialog(foto),
+              icon: const Icon(Icons.photo_rounded, size: 16),
+              label: const Text(
+                'Lihat Foto Bukti',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1110,7 +1991,9 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
               child: Image.network(
                 _photoFullUrl(url),
                 fit: BoxFit.contain,
@@ -1139,7 +2022,11 @@ class _KaptenConfirmScreenState extends State<KaptenConfirmScreen> {
       ),
       child: Text(
         text,
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: textColor),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: textColor,
+        ),
       ),
     );
   }

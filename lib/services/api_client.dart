@@ -2,30 +2,22 @@
 
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config/app_config.dart';
 import '../utils/network_exception.dart';
 
 class ApiClient {
-  // Production VPS:
-  static const String _defaultUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: 'http://10.86.178.182:8080/api/v1',
-  );
-  // Fallback: ADB Reverse (USB cable)
-  static const String _fallbackUrl = String.fromEnvironment(
-    'API_URL_FALLBACK',
-    defaultValue: 'http://127.0.0.1:8080/api/v1',
-  );
   static const String _tokenKey = 'auth_token';
+  static const Set<String> _idempotentMethods = {'GET', 'HEAD', 'OPTIONS'};
 
   static Dio? _dio;
-  static String _activeBaseUrl = _defaultUrl;
+  static String _activeBaseUrl = AppConfig.apiUrl;
 
   /// Base URL API yang sedang aktif (default/fallback yang berhasil dipakai).
   static String get baseUrl => _activeBaseUrl;
 
-  /// Reset active base URL kembali ke default URL (127.0.0.1:8081 via ADB).
+  /// Reset active base URL kembali ke konfigurasi utama.
   static void resetToBaseUrl() {
-    _activeBaseUrl = _defaultUrl;
+    _activeBaseUrl = AppConfig.apiUrl;
     _dio = null;
   }
 
@@ -49,7 +41,7 @@ class ApiClient {
       ),
     );
 
-    // Interceptor: otomatis tambah token & fallback otomatis ngrok -> LAN
+    // Interceptor: tambah token dan fallback hanya untuk request idempoten.
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
@@ -63,13 +55,20 @@ class ApiClient {
           final isNgrokOffline =
               e.response?.statusCode == 404 &&
               (e.response?.data?.toString().contains('ngrok') ?? false);
-          if ((e.type == DioExceptionType.connectionTimeout ||
-                  e.type == DioExceptionType.connectionError ||
-                  isNgrokOffline) &&
-              _activeBaseUrl == _defaultUrl &&
-              _fallbackUrl != _defaultUrl) {
-            // Coba fallback URL
-            _activeBaseUrl = _fallbackUrl;
+          final isConnectionFailure =
+              e.type == DioExceptionType.connectionTimeout ||
+              e.type == DioExceptionType.connectionError;
+          final isIdempotent = _idempotentMethods.contains(
+            e.requestOptions.method.toUpperCase(),
+          );
+          final canUseFallback =
+              AppConfig.enableNetworkFallback &&
+              _activeBaseUrl == AppConfig.apiUrl;
+
+          if (canUseFallback &&
+              isIdempotent &&
+              (isConnectionFailure || isNgrokOffline)) {
+            _activeBaseUrl = AppConfig.apiFallbackUrl;
             _dio = null;
             try {
               final opts = e.requestOptions;
@@ -81,8 +80,8 @@ class ApiClient {
               );
               return handler.resolve(response);
             } catch (_) {
-              // Jika fallback juga gagal, kembalikan ke default URL agar tidak tersangkut di IP mati
-              _activeBaseUrl = _defaultUrl;
+              // Jangan biarkan client tersangkut di URL fallback yang mati.
+              _activeBaseUrl = AppConfig.apiUrl;
               _dio = null;
             }
           }
@@ -350,7 +349,9 @@ class ApiClient {
   }) async {
     if (idKendaraan <= 0 && idDriver <= 0) return;
     try {
-      print('📴 [GPS TRACKING] Mengirim sinyal offline untuk kendaraan=$idKendaraan driver=$idDriver');
+      print(
+        '📴 [GPS TRACKING] Mengirim sinyal offline untuk kendaraan=$idKendaraan driver=$idDriver',
+      );
       await dio.post(
         '/driver/tracking',
         data: {
@@ -359,7 +360,9 @@ class ApiClient {
           'id_driver': idDriver,
         },
       );
-      print('✅ [GPS TRACKING] Sinyal offline berhasil diterima backend (dihapus dari peta).');
+      print(
+        '✅ [GPS TRACKING] Sinyal offline berhasil diterima backend (dihapus dari peta).',
+      );
     } catch (e) {
       print('⚠️ [GPS TRACKING] Gagal kirim sinyal offline: $e');
     }
@@ -673,11 +676,17 @@ class ApiClient {
   }
 
   /// Ambil data cargo hari ini untuk lokasi kapten (pre-fill form)
-  static Future<Map<String, dynamic>?> fetchTodayCargo({int? idRitase, String? jenisRitase, int? ritaseKe}) async {
+  static Future<Map<String, dynamic>?> fetchTodayCargo({
+    int? idRitase,
+    String? jenisRitase,
+    int? ritaseKe,
+  }) async {
     try {
       final params = <String>[];
       if (idRitase != null && idRitase > 0) params.add('id_ritase=$idRitase');
-      if (jenisRitase != null && jenisRitase.isNotEmpty) params.add('jenis_ritase=$jenisRitase');
+      if (jenisRitase != null && jenisRitase.isNotEmpty) {
+        params.add('jenis_ritase=$jenisRitase');
+      }
       if (ritaseKe != null && ritaseKe > 0) params.add('ritase_ke=$ritaseKe');
       final query = params.isNotEmpty ? '?${params.join('&')}' : '';
       final res = await dio.get('/kapten/today-cargo$query');
@@ -720,11 +729,21 @@ class ApiClient {
     required String jenisRitase,
     required int ritaseKe,
     required int jumlahAwb,
-    required int koliJkt, required int koliSeg, required int koliBtn,
-    required int ecerJkt, required int ecerSeg, required int ecerBtn,
-    required int koliHvJkt, required int koliHvSeg, required int koliHvBtn,
-    required int ecerHvJkt, required int ecerHvSeg, required int ecerHvBtn,
-    required int awbHvJkt, required int awbHvSeg, required int awbHvBtn,
+    required int koliJkt,
+    required int koliSeg,
+    required int koliBtn,
+    required int ecerJkt,
+    required int ecerSeg,
+    required int ecerBtn,
+    required int koliHvJkt,
+    required int koliHvSeg,
+    required int koliHvBtn,
+    required int ecerHvJkt,
+    required int ecerHvSeg,
+    required int ecerHvBtn,
+    required int awbHvJkt,
+    required int awbHvSeg,
+    required int awbHvBtn,
     int? koliHv,
     int? hvAwb,
     int? ecerHv,
@@ -740,30 +759,49 @@ class ApiClient {
     int resolveJkt(int alias, int alt, int jkt, int seg, int btn) =>
         (jkt == 0 && seg == 0 && btn == 0) ? (alias > 0 ? alias : alt) : jkt;
     final kHvJkt = resolveJkt(koliHv ?? 0, 0, koliHvJkt, koliHvSeg, koliHvBtn);
-    final eHvJkt = resolveJkt(hvAwb ?? 0, ecerHv ?? 0, ecerHvJkt, ecerHvSeg, ecerHvBtn);
+    final eHvJkt = resolveJkt(
+      hvAwb ?? 0,
+      ecerHv ?? 0,
+      ecerHvJkt,
+      ecerHvSeg,
+      ecerHvBtn,
+    );
     final aHvJkt = resolveJkt(awbHv ?? 0, 0, awbHvJkt, awbHvSeg, awbHvBtn);
     try {
-      final res = await dio.post('/kapten/cargo-input', data: {
-        'id_ritase': idRitase,
-        'id_stop': idStop,
-        'jenis_ritase': jenisRitase,
-        'ritase_ke': ritaseKe,
-        'nama_lokasi': namaLokasi ?? '',
-        'latitude': latitude ?? 0,
-        'longitude': longitude ?? 0,
-        'jumlah_awb': jumlahAwb,
-        'koli_jkt': koliJkt, 'koli_seg': koliSeg, 'koli_btn': koliBtn,
-        'ecer_jkt': ecerJkt, 'ecer_seg': ecerSeg, 'ecer_btn': ecerBtn,
-        'koli_hv_jkt': koliHvJkt, 'koli_hv_seg': koliHvSeg, 'koli_hv_btn': koliHvBtn,
-        'ecer_hv_jkt': ecerHvJkt, 'ecer_hv_seg': ecerHvSeg, 'ecer_hv_btn': ecerHvBtn,
-        'awb_hv_jkt': awbHvJkt, 'awb_hv_seg': awbHvSeg, 'awb_hv_btn': awbHvBtn,
-        'koli_hv': kHvJkt,
-        'hv_awb': eHvJkt,
-        'ecer_hv': eHvJkt,
-        'awb_hv': aHvJkt,
-        'foto_manifest_url': fotoManifestUrl ?? '',
-        'catatan': catatan ?? '',
-      });
+      final res = await dio.post(
+        '/kapten/cargo-input',
+        data: {
+          'id_ritase': idRitase,
+          'id_stop': idStop,
+          'jenis_ritase': jenisRitase,
+          'ritase_ke': ritaseKe,
+          'nama_lokasi': namaLokasi ?? '',
+          'latitude': latitude ?? 0,
+          'longitude': longitude ?? 0,
+          'jumlah_awb': jumlahAwb,
+          'koli_jkt': koliJkt,
+          'koli_seg': koliSeg,
+          'koli_btn': koliBtn,
+          'ecer_jkt': ecerJkt,
+          'ecer_seg': ecerSeg,
+          'ecer_btn': ecerBtn,
+          'koli_hv_jkt': koliHvJkt,
+          'koli_hv_seg': koliHvSeg,
+          'koli_hv_btn': koliHvBtn,
+          'ecer_hv_jkt': ecerHvJkt,
+          'ecer_hv_seg': ecerHvSeg,
+          'ecer_hv_btn': ecerHvBtn,
+          'awb_hv_jkt': awbHvJkt,
+          'awb_hv_seg': awbHvSeg,
+          'awb_hv_btn': awbHvBtn,
+          'koli_hv': kHvJkt,
+          'hv_awb': eHvJkt,
+          'ecer_hv': eHvJkt,
+          'awb_hv': aHvJkt,
+          'foto_manifest_url': fotoManifestUrl ?? '',
+          'catatan': catatan ?? '',
+        },
+      );
       if (res.statusCode == 201 && res.data != null) {
         final body = res.data;
         if (body is Map && body['data'] != null) {
@@ -804,9 +842,10 @@ class ApiClient {
   /// Pilih seller → return token baru dengan seller_id yang dipilih
   static Future<Map<String, dynamic>?> selectSeller(int sellerId) async {
     try {
-      final res = await dio.post('/kapten/select-seller', data: {
-        'seller_id': sellerId,
-      });
+      final res = await dio.post(
+        '/kapten/select-seller',
+        data: {'seller_id': sellerId},
+      );
       if (res.statusCode == 200 && res.data != null) {
         final body = res.data;
         if (body is Map && body['data'] != null) {
@@ -847,9 +886,10 @@ class ApiClient {
   /// Pilih implant → return token baru dengan implant_id yang dipilih
   static Future<Map<String, dynamic>?> selectImplant(int implantId) async {
     try {
-      final res = await dio.post('/kapten/select-implant', data: {
-        'implant_id': implantId,
-      });
+      final res = await dio.post(
+        '/kapten/select-implant',
+        data: {'implant_id': implantId},
+      );
       if (res.statusCode == 200 && res.data != null) {
         final body = res.data;
         if (body is Map && body['data'] != null) {
@@ -893,11 +933,21 @@ class ApiClient {
     required int ritaseKe,
     required int idRitase,
     int jumlahAwb = 0,
-    int koliJkt = 0, int koliSeg = 0, int koliBtn = 0,
-    int ecerJkt = 0, int ecerSeg = 0, int ecerBtn = 0,
-    int koliHvJkt = 0, int koliHvSeg = 0, int koliHvBtn = 0,
-    int ecerHvJkt = 0, int ecerHvSeg = 0, int ecerHvBtn = 0,
-    int awbHvJkt = 0, int awbHvSeg = 0, int awbHvBtn = 0,
+    int koliJkt = 0,
+    int koliSeg = 0,
+    int koliBtn = 0,
+    int ecerJkt = 0,
+    int ecerSeg = 0,
+    int ecerBtn = 0,
+    int koliHvJkt = 0,
+    int koliHvSeg = 0,
+    int koliHvBtn = 0,
+    int ecerHvJkt = 0,
+    int ecerHvSeg = 0,
+    int ecerHvBtn = 0,
+    int awbHvJkt = 0,
+    int awbHvSeg = 0,
+    int awbHvBtn = 0,
     int? diambilKoliHv,
     int? diambilHvAwb,
     int? diambilEcerHv,
@@ -907,27 +957,58 @@ class ApiClient {
   }) async {
     int resolveJkt(int alias, int alt, int jkt, int seg, int btn) =>
         (jkt == 0 && seg == 0 && btn == 0) ? (alias > 0 ? alias : alt) : jkt;
-    final kHvJkt = resolveJkt(diambilKoliHv ?? 0, 0, koliHvJkt, koliHvSeg, koliHvBtn);
-    final eHvJkt = resolveJkt(diambilHvAwb ?? 0, diambilEcerHv ?? 0, ecerHvJkt, ecerHvSeg, ecerHvBtn);
-    final aHvJkt = resolveJkt(diambilAwbHv ?? 0, 0, awbHvJkt, awbHvSeg, awbHvBtn);
+    final kHvJkt = resolveJkt(
+      diambilKoliHv ?? 0,
+      0,
+      koliHvJkt,
+      koliHvSeg,
+      koliHvBtn,
+    );
+    final eHvJkt = resolveJkt(
+      diambilHvAwb ?? 0,
+      diambilEcerHv ?? 0,
+      ecerHvJkt,
+      ecerHvSeg,
+      ecerHvBtn,
+    );
+    final aHvJkt = resolveJkt(
+      diambilAwbHv ?? 0,
+      0,
+      awbHvJkt,
+      awbHvSeg,
+      awbHvBtn,
+    );
     try {
-      final res = await dio.post('/kapten/confirm-pickup', data: {
-        'jenis_ritase': jenisRitase,
-        'ritase_ke': ritaseKe,
-        'id_ritase': idRitase,
-        'diambil_awb': jumlahAwb,
-        'diambil_koli_jkt': koliJkt, 'diambil_koli_seg': koliSeg, 'diambil_koli_btn': koliBtn,
-        'diambil_ecer_jkt': ecerJkt, 'diambil_ecer_seg': ecerSeg, 'diambil_ecer_btn': ecerBtn,
-        'diambil_koli_hv_jkt': koliHvJkt, 'diambil_koli_hv_seg': koliHvSeg, 'diambil_koli_hv_btn': koliHvBtn,
-        'diambil_ecer_hv_jkt': ecerHvJkt, 'diambil_ecer_hv_seg': ecerHvSeg, 'diambil_ecer_hv_btn': ecerHvBtn,
-        'diambil_awb_hv_jkt': awbHvJkt, 'diambil_awb_hv_seg': awbHvSeg, 'diambil_awb_hv_btn': awbHvBtn,
-        'diambil_koli_hv': kHvJkt,
-        'diambil_hv_awb': eHvJkt,
-        'diambil_ecer_hv': eHvJkt,
-        'diambil_awb_hv': aHvJkt,
-        'foto_penjemputan_url': fotoPenjemputanUrl ?? '',
-        'catatan': catatan ?? '',
-      });
+      final res = await dio.post(
+        '/kapten/confirm-pickup',
+        data: {
+          'jenis_ritase': jenisRitase,
+          'ritase_ke': ritaseKe,
+          'id_ritase': idRitase,
+          'diambil_awb': jumlahAwb,
+          'diambil_koli_jkt': koliJkt,
+          'diambil_koli_seg': koliSeg,
+          'diambil_koli_btn': koliBtn,
+          'diambil_ecer_jkt': ecerJkt,
+          'diambil_ecer_seg': ecerSeg,
+          'diambil_ecer_btn': ecerBtn,
+          'diambil_koli_hv_jkt': koliHvJkt,
+          'diambil_koli_hv_seg': koliHvSeg,
+          'diambil_koli_hv_btn': koliHvBtn,
+          'diambil_ecer_hv_jkt': ecerHvJkt,
+          'diambil_ecer_hv_seg': ecerHvSeg,
+          'diambil_ecer_hv_btn': ecerHvBtn,
+          'diambil_awb_hv_jkt': awbHvJkt,
+          'diambil_awb_hv_seg': awbHvSeg,
+          'diambil_awb_hv_btn': awbHvBtn,
+          'diambil_koli_hv': kHvJkt,
+          'diambil_hv_awb': eHvJkt,
+          'diambil_ecer_hv': eHvJkt,
+          'diambil_awb_hv': aHvJkt,
+          'foto_penjemputan_url': fotoPenjemputanUrl ?? '',
+          'catatan': catatan ?? '',
+        },
+      );
       if (res.statusCode == 200 && res.data != null) {
         final body = res.data;
         if (body is Map && body['data'] != null) {
@@ -935,6 +1016,129 @@ class ApiClient {
         }
       }
       return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  // ── KAPTEN KONFIRMASI GABUNGAN (multi-implant, satu tap) ──
+
+  /// Pending + sisa + riwayat SEMUA implant kapten sekaligus.
+  /// Return {'implants': [{'id_implant','nama_implant','pending':[...],'sisa_grup':[...],'riwayat':[...]}]}.
+  static Future<List<Map<String, dynamic>>> fetchBatchOverview() async {
+    try {
+      final res = await dio.get('/kapten/batch-overview');
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is Map) {
+          final data = body['data'];
+          if (data['implants'] is List) {
+            return List<Map<String, dynamic>>.from(data['implants']);
+          }
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Ritase hari ini yang menyinggahi SEMUA implant terpilih + berdriver.
+  static Future<List<Map<String, dynamic>>> fetchBatchRitase(
+    List<int> implantIds, {
+    int? titikId,
+  }) async {
+    try {
+      final query = <String, dynamic>{'implant_ids': implantIds.join(',')};
+      if (titikId != null) query['titik_id'] = titikId;
+      final res = await dio.get('/kapten/batch-ritase', queryParameters: query);
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is List) {
+          return List<Map<String, dynamic>>.from(body['data']);
+        }
+      }
+      return [];
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Konfirmasi gabungan: SATU ritase/driver untuk BANYAK implant sekaligus.
+  /// items: [{'id_implant':..,'diambil_awb':..,'diambil_koli_jkt':.., ...}].
+  /// Return {'id_ritase': ..., 'items': [{'id_implant','id_konfirmasi','total_linked','sisa_awb'}]}.
+  static Future<Map<String, dynamic>?> confirmPickupBatch({
+    required String jenisRitase,
+    required int ritaseKe,
+    required int idRitase,
+    required List<Map<String, dynamic>> items,
+    int? ritaseKeAsal,
+    String? tanggalAsal,
+    String? fotoPenjemputanUrl,
+    String? catatan,
+  }) async {
+    try {
+      final res = await dio.post(
+        '/kapten/confirm-pickup-batch',
+        data: {
+          'jenis_ritase': jenisRitase,
+          'ritase_ke': ritaseKe,
+          'ritase_ke_asal': ritaseKeAsal ?? ritaseKe,
+          'tanggal_asal': tanggalAsal ?? '',
+          'id_ritase': idRitase,
+          'foto_penjemputan_url': fotoPenjemputanUrl ?? '',
+          'catatan': catatan ?? '',
+          'items': items,
+        },
+      );
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] != null) {
+          return Map<String, dynamic>.from(body['data']);
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      throw NetworkException.from(e);
+    } catch (e) {
+      throw NetworkException.from(e);
+    }
+  }
+
+  /// Riwayat konfirmasi kapten: diambil, terlambat, dan terlewat.
+  static Future<List<Map<String, dynamic>>> fetchKaptenKonfirmasiHistory({
+    String filter = 'week',
+    String? startDate,
+    String? endDate,
+    int? idImplant,
+  }) async {
+    try {
+      final res = await dio.get(
+        '/kapten/konfirmasi-history',
+        queryParameters: {
+          'filter': filter,
+          if (startDate != null && startDate.isNotEmpty)
+            'start_date': startDate,
+          if (endDate != null && endDate.isNotEmpty) 'end_date': endDate,
+          if (idImplant != null && idImplant > 0) 'id_implant': idImplant,
+        },
+      );
+      if (res.statusCode == 200 && res.data != null) {
+        final body = res.data;
+        if (body is Map && body['data'] is Map) {
+          final data = body['data'];
+          if (data['riwayat'] is List) {
+            return List<Map<String, dynamic>>.from(data['riwayat']);
+          }
+        }
+      }
+      return [];
     } on DioException catch (e) {
       throw NetworkException.from(e);
     } catch (e) {

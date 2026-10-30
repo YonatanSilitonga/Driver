@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'config/app_config.dart';
 import 'screens/splash_screen.dart';
 import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppConfig.validate();
   await NotificationService.init();
   runApp(const MyApp());
 }
