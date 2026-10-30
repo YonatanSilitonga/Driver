@@ -207,14 +207,18 @@ class _LoginScreenState extends State<LoginScreen> {
           await PermissionGuideScreen.maybeShowOnce(context);
 
           if (!mounted) return;
-// Route berdasarkan role
-final role = await ApiClient.getUserRole();
-final userRole = (user['role'] ?? '').toString().trim().toLowerCase();
-final isDriverPickup = userRole == 'driver_pickup' || role == 'driver_pickup';
-final isKapten = userRole == 'kapten' || role == 'kapten';
-final destinationWidget = isDriverPickup
-    ? const PickupHomeScreen()
-    : (isKapten ? const ImplantSelectionScreen() : const HomeScreen());
+
+          // Route berdasarkan role
+          final role = await ApiClient.getUserRole();
+          if (!mounted) return;
+
+          final userRole = (user['role'] ?? '').toString().trim().toLowerCase();
+          final isDriverPickup =
+              userRole == 'driver_pickup' || role == 'driver_pickup';
+          final isKapten = userRole == 'kapten' || role == 'kapten';
+          final destinationWidget = isDriverPickup
+              ? const PickupHomeScreen()
+              : (isKapten ? const ImplantSelectionScreen() : const HomeScreen());
 
           Navigator.of(context).pushAndRemoveUntil(
             PageRouteBuilder(
