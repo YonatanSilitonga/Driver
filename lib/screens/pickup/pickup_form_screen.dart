@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import '../../services/api_client.dart';
 import '../../services/pickup_service.dart';
 
 class PickupFormScreen extends StatefulWidget {
@@ -24,13 +27,38 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
   final _sellerController = TextEditingController();
   final _awbController = TextEditingController();
   final _hvController = TextEditingController(text: '0');
-  final _koliController = TextEditingController(text: '0');
-  final _ecerController = TextEditingController(text: '0');
   final _catatanController = TextEditingController();
 
   final _scrollController = ScrollController();
   int _savedCount = 0;
   bool _isSubmitting = false;
+  File? _pickedImage;
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final XFile? file = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1280,
+        maxHeight: 1280,
+        imageQuality: 70,
+      );
+      if (file != null) {
+        setState(() {
+          _pickedImage = File(file.path);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Gagal memilih foto: $e'),
+            backgroundColor: const Color(0xFFEF4444),
+          ),
+        );
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -38,8 +66,6 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
     _sellerController.dispose();
     _awbController.dispose();
     _hvController.dispose();
-    _koliController.dispose();
-    _ecerController.dispose();
     _catatanController.dispose();
     super.dispose();
   }
@@ -65,6 +91,7 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
           status: 'menuju_gudang',
           catatan: 'Kembali ke gudang',
         );
+        await ApiClient.savePickupStatus('menuju_gudang');
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -86,7 +113,7 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop('menuju_gudang');
       } catch (e) {
         if (!mounted) return;
         setState(() => _isSubmitting = false);
@@ -104,11 +131,23 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
 
     final awb = int.tryParse(awbText) ?? 0;
     final hv = int.tryParse(_hvController.text.trim()) ?? 0;
-    final koli = int.tryParse(_koliController.text.trim()) ?? 0;
-    final ecer = int.tryParse(_ecerController.text.trim()) ?? 0;
     final catatan = _catatanController.text.trim();
 
     setState(() => _isSubmitting = true);
+
+    String? photoUrl;
+    if (_pickedImage != null) {
+      try {
+        photoUrl = await ApiClient.uploadManifestPhoto(
+          idRitase: 0,
+          filePath: _pickedImage!.path,
+          namaLokasi: seller,
+        );
+      } catch (err) {
+        // ignore: avoid_print
+        print('⚠️ Gagal upload foto manifest: $err');
+      }
+    }
 
     try {
       await PickupService.savePickupBarang(
@@ -117,11 +156,13 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
         asalSeller: seller,
         jumlahBarang: awb,
         highValue: hv,
-        koli: koli,
-        ecer: ecer,
+        koli: 0,
+        ecer: 0,
         status: targetStatus,
         catatan: catatan,
+        fotoUrl: photoUrl,
       );
+      await ApiClient.savePickupStatus(targetStatus);
 
       if (!mounted) return;
 
@@ -146,16 +187,15 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop('menuju_gudang');
       } else {
         // Menuju Seller Berikutnya: Reset form agar langsung muncul form lagi untuk input seller berikutnya
         _savedCount++;
         _sellerController.clear();
         _awbController.clear();
         _hvController.text = '0';
-        _koliController.text = '0';
-        _ecerController.text = '0';
         _catatanController.clear();
+        _pickedImage = null;
         _formKey.currentState?.reset();
 
         setState(() => _isSubmitting = false);
@@ -224,7 +264,7 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
         centerTitle: true,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Color(0xFF0F172A), size: 20),
-          onPressed: () => Navigator.of(context).pop(_savedCount > 0),
+          onPressed: () => Navigator.of(context).pop(_savedCount > 0 ? 'menuju_seller' : null),
         ),
         title: Text(
           _savedCount > 0 ? 'Input Muatan Seller (${_savedCount + 1})' : 'Input Muatan Seller',
@@ -332,8 +372,8 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
                             return 'Jumlah AWB wajib diisi';
                           }
                           final num = int.tryParse(value);
-                          if (num == null || num <= 0) {
-                            return 'Jumlah AWB harus lebih dari 0';
+                          if (num == null || num < 0) {
+                            return 'Jumlah AWB tidak valid';
                           }
                           return null;
                         },
@@ -376,66 +416,7 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
                         ),
                       ),
 
-                      const SizedBox(height: 18),
 
-                      // Input Rincian Opsional: Koli & Ecer
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Koli (Karung/Koli)',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF64748B)),
-                                ),
-                                const SizedBox(height: 6),
-                                TextFormField(
-                                  controller: _koliController,
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                                  decoration: InputDecoration(
-                                    hintText: '0',
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Ecer (Paket Satuan)',
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF64748B)),
-                                ),
-                                const SizedBox(height: 6),
-                                TextFormField(
-                                  controller: _ecerController,
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                                  decoration: InputDecoration(
-                                    hintText: '0',
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
 
                       const SizedBox(height: 18),
 
@@ -462,6 +443,120 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
                           ),
                         ),
                       ),
+
+                      const SizedBox(height: 18),
+
+                      // Foto Bukti Manifest / Scan (Opsional)
+                      const Text(
+                        'Foto Bukti Scan / Manifest (Opsional)',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (_pickedImage == null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: _isSubmitting ? null : () => _pickImage(ImageSource.gallery),
+                                      icon: const Icon(Icons.photo_library_rounded, size: 20, color: Color(0xFFF27D26)),
+                                      label: const Text(
+                                        'Pilih dari Galeri',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF0F172A),
+                                        ),
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                        backgroundColor: Colors.white,
+                                        side: const BorderSide(color: Color(0xFFF27D26), width: 1.4),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  OutlinedButton(
+                                    onPressed: _isSubmitting ? null : () => _pickImage(ImageSource.camera),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                      backgroundColor: Colors.white,
+                                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    child: const Icon(Icons.camera_alt_rounded, size: 20, color: Color(0xFF64748B)),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'Pilih foto hasil scan / resi bukti yang tersimpan di galeri HP',
+                                style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        )
+                      else
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFF27D26), width: 1.2),
+                          ),
+                          child: Row(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  _pickedImage!,
+                                  width: 64,
+                                  height: 64,
+                                  fit: BoxFit.cover,
+                                  cacheWidth: 200,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Foto Bukti Dipilih',
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A)),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _pickedImage!.path.split(RegExp(r'[\\/]')).last,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444)),
+                                tooltip: 'Hapus Foto',
+                                onPressed: _isSubmitting ? null : () => setState(() => _pickedImage = null),
+                              ),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -475,7 +570,7 @@ class _PickupFormScreenState extends State<PickupFormScreen> {
                   border: const Border(top: BorderSide(color: Color(0xFFE2E8F0))),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
+                      color: Colors.black.withValues(alpha: 0.04),
                       blurRadius: 10,
                       offset: const Offset(0, -4),
                     ),

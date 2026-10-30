@@ -8,11 +8,8 @@ class AppUpdater {
   static bool _isDialogShowing = false;
 
   /// Versi aplikasi saat ini.
-  /// Checklist rilis versi baru:
-  /// 1. Samakan dengan `version:` di pubspec.yaml dan VersionName di handlers.go
-  ///    (atau APP_VERSION_NAME di env backend).
-  /// 2. Naikkan build number pubspec (+N) dan VersionCode backend.
-  static const String currentAppVersion = "1.2.2";
+  /// WAJIB diubah setiap kali rilis versi baru (sama dengan VersionName di handlers.go).
+  static const String currentAppVersion = "1.2.6";
 
   /// Cek versi aplikasi ke server & tampilkan dialog jika versi server beda.
   /// Build debug dan build non-production selalu dilewati: dialog force-update

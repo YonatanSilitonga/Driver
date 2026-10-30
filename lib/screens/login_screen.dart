@@ -113,20 +113,24 @@ class _LoginScreenState extends State<LoginScreen> {
           // Set identitas tracking dari akun yang login
           try {
             final cfg = await ApiClient.loadDriverConfig();
-            final idDriver = _toInt(
-              user['id_driver'],
-              fallback: cfg['id_driver'] ?? 0,
-            );
-            final idKendaraan = _toInt(
-              user['id_kendaraan'],
-              fallback: cfg['id_kendaraan'] ?? 0,
-            );
-            final driverName =
-                (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
-                    .toString();
             final userRole =
                 (user['role'] ?? '').toString().trim().toLowerCase();
             final idUser = _toInt(user['id_user']);
+            var idDriver = _toInt(
+              user['id_driver'],
+              fallback: cfg['id_driver'] ?? 0,
+            );
+            var idKendaraan = _toInt(
+              user['id_kendaraan'],
+              fallback: cfg['id_kendaraan'] ?? 0,
+            );
+            if (userRole == 'driver_pickup') {
+              if (idDriver <= 0) idDriver = (idUser > 0 ? idUser : 39);
+              if (idKendaraan <= 0) idKendaraan = 18;
+            }
+            final driverName =
+                (user['nama'] ?? user['name'] ?? user['username'] ?? 'Driver')
+                    .toString();
             final username = (user['username'] ?? '').toString();
 
             await ApiClient.saveDriverConfig(

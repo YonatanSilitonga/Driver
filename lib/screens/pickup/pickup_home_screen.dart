@@ -16,13 +16,13 @@ class PickupHomeScreen extends StatefulWidget {
 }
 
 class _PickupHomeScreenState extends State<PickupHomeScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
   Timer? _clockTimer;
   Timer? _trackingTimer;
-  String _currentTime = '';
+  final ValueNotifier<String> _currentTimeNotifier = ValueNotifier<String>('');
 
   int _idUser = 0;
   int _idDriver = 39;
@@ -32,12 +32,17 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
   String _username = '';
   String _currentStatus = 'standby'; // 'standby' | 'menuju_seller' | 'menuju_gudang' | 'selesai'
   
-  bool _isLoading = true;
+  bool _isLoading = false;
+  bool _hasAutoOpenedForm = false;
+  bool _isFormScreenOpen = false;
+  Position? _lastSentPosition;
+  DateTime? _lastSentTime;
   List<Map<String, dynamic>> _historyLogs = [];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     // Animasi denyut halus untuk tombol bulat besar
     _pulseController = AnimationController(
@@ -54,21 +59,42 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
       if (mounted) _updateTime();
     });
 
-    // Kirim posisi GPS secara berkala setiap 15 detik HANYA jika pickup sedang aktif
-    _trackingTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (mounted && (_currentStatus == 'menuju_seller' || _currentStatus == 'menuju_gudang')) {
+    // Cek posisi GPS setiap 10 detik (dikirim jika pergerakan >= 5 meter atau heartbeat 60s)
+    _trackingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) {
         _sendLiveLocation();
+        ensureTrackingRunning();
       }
     });
 
-    _loadUserData();
+    _loadUserData().then((_) {
+      if (mounted) {
+        _sendLiveLocation(force: true);
+        ensureTrackingRunning();
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Driver kembali ke aplikasi setelah membuka aplikasi lain (WA, Maps, Kamera, dll.)
+      // Jangan panggil _loadUserData() agar tidak memicu auto-open form ganda!
+      _refreshHistory();
+      if (mounted) {
+        _sendLiveLocation(force: true);
+        ensureTrackingRunning();
+      }
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulseController.dispose();
     _clockTimer?.cancel();
     _trackingTimer?.cancel();
+    _currentTimeNotifier.dispose();
     super.dispose();
   }
 
@@ -77,36 +103,57 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
     final h = now.hour.toString().padLeft(2, '0');
     final m = now.minute.toString().padLeft(2, '0');
     final s = now.second.toString().padLeft(2, '0');
-    setState(() {
-      _currentTime = '$h.$m.$s';
-    });
+    _currentTimeNotifier.value = '$h.$m.$s';
   }
 
   Future<void> _loadUserData() async {
-    setState(() => _isLoading = true);
     try {
       final cfg = await ApiClient.loadDriverConfig();
       _idUser = cfg['id_user'] as int? ?? 0;
-      _idDriver = cfg['id_driver'] as int? ?? 39;
-      _idKendaraan = cfg['id_kendaraan'] as int? ?? 18;
+      _idDriver = cfg['id_driver'] as int? ?? 0;
+      if (_idDriver <= 0) _idDriver = (_idUser > 0 ? _idUser : 39);
+      _idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+      if (_idKendaraan <= 0) _idKendaraan = 18;
       _platNomor = (cfg['plat_nomor'] as String? ?? '').isNotEmpty
           ? cfg['plat_nomor'] as String
           : 'B 9278 PDD';
       _driverName = cfg['driver_name'] as String? ?? '';
       _username = cfg['username'] as String? ?? '';
 
-      if (_idUser == 0 || _driverName.isEmpty || _idDriver <= 0) {
-        final me = await AuthService.me();
-        if (me != null) {
-          _idUser = (me['id_user'] is int) ? me['id_user'] : int.tryParse(me['id_user'].toString()) ?? 0;
-          final parsedDriver = (me['id_driver'] is int) ? me['id_driver'] : int.tryParse(me['id_driver']?.toString() ?? '0') ?? 0;
-          if (parsedDriver > 0) _idDriver = parsedDriver;
-          _driverName = (me['nama'] ?? me['name'] ?? me['username'] ?? 'Driver').toString();
-          _username = (me['username'] ?? '').toString();
-        }
+      // 1. Baca status lokal secara instan (0 delay tanpa menunggu jaringan)
+      final localStatus = (cfg['pickup_status'] ?? '').toString();
+      if (localStatus.isNotEmpty && localStatus != 'standby') {
+        _currentStatus = localStatus;
       }
 
-      // Pastikan selalu ada idKendaraan default (18) & idDriver default (39)
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+
+      // Jika perjalanan sedang aktif menuju seller, langsung buka form input muatan seller
+      if (_currentStatus == 'menuju_seller' && !_hasAutoOpenedForm && !_isFormScreenOpen) {
+        _hasAutoOpenedForm = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _openPickupForm();
+          }
+        });
+      }
+
+      // 2. Sinkronisasi data user & history di background
+      if (_idUser == 0 || _driverName.isEmpty || _idDriver <= 0) {
+        try {
+          final me = await AuthService.me().timeout(const Duration(seconds: 3));
+          if (me != null) {
+            _idUser = (me['id_user'] is int) ? me['id_user'] : int.tryParse(me['id_user'].toString()) ?? 0;
+            final parsedDriver = (me['id_driver'] is int) ? me['id_driver'] : int.tryParse(me['id_driver']?.toString() ?? '0') ?? 0;
+            if (parsedDriver > 0) _idDriver = parsedDriver;
+            _driverName = (me['nama'] ?? me['name'] ?? me['username'] ?? 'Driver').toString();
+            _username = (me['username'] ?? '').toString();
+          }
+        } catch (_) {}
+      }
+
       if (_idDriver <= 0) _idDriver = 39;
       if (_idKendaraan <= 0) _idKendaraan = 18;
 
@@ -119,10 +166,10 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         idUser: _idUser,
         username: _username.isNotEmpty ? _username : 'pickup',
         platNomor: _platNomor,
+        pickupStatus: _currentStatus,
       );
 
       await _refreshHistory();
-      // Kirim tracking pertama kali HANYA jika perjalanan sedang aktif
       if (_currentStatus == 'menuju_seller' || _currentStatus == 'menuju_gudang') {
         await _sendLiveLocation();
       }
@@ -135,10 +182,34 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
     }
   }
 
+  /// Mengambil log yang termasuk dalam perjalanan pickup aktif saat ini (setelah status 'selesai' terakhir).
+  List<Map<String, dynamic>> get _currentSessionLogs {
+    final activeLogs = <Map<String, dynamic>>[];
+    for (final log in _historyLogs) {
+      final status = (log['status'] ?? '').toString().toLowerCase();
+      if (status == 'selesai') {
+        break; // Berhenti di checkpoint 'selesai' terakhir
+      }
+      activeLogs.add(log);
+    }
+    return activeLogs;
+  }
+
+  /// Jumlah seller riil yang muatannya sudah diinput pada sesi aktif
+  int get _currentSessionSellerCount {
+    return _currentSessionLogs.where((l) {
+      final seller = (l['asal_seller'] ?? '').toString().trim();
+      return seller.isNotEmpty &&
+          seller != 'Menuju Seller' &&
+          seller != 'Perjalanan ke Gudang' &&
+          seller != 'Gudang';
+    }).length;
+  }
+
   /// Kirim posisi live GPS driver pickup langsung ke endpoint /driver/tracking
   Future<void> _sendLiveLocation({bool force = false}) async {
-    if (_idDriver <= 0 || _idKendaraan <= 0) return;
-    if (!force && _currentStatus != 'menuju_seller' && _currentStatus != 'menuju_gudang') return;
+    final effectiveDriverId = _idDriver > 0 ? _idDriver : (_idUser > 0 ? _idUser : 39);
+    final effectiveKendaraanId = _idKendaraan > 0 ? _idKendaraan : 18;
     try {
       LocationPermission perm = await Geolocator.checkPermission();
       if (perm == LocationPermission.denied) {
@@ -148,10 +219,32 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         }
       }
 
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 6),
-      );
+      Position? pos;
+      try {
+        pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 7),
+          ),
+        );
+      } catch (_) {
+        pos = await Geolocator.getLastKnownPosition();
+      }
+      if (pos == null) return;
+
+      final now = DateTime.now();
+      if (!force && _lastSentPosition != null && _lastSentTime != null) {
+        final dist = Geolocator.distanceBetween(
+          _lastSentPosition!.latitude,
+          _lastSentPosition!.longitude,
+          pos.latitude,
+          pos.longitude,
+        );
+        final sec = now.difference(_lastSentTime!).inSeconds;
+        // Skip jika belum 10 detik ATAU pergerakan < 5m (kecuali sudah >= 55s untuk heartbeat agar armada tidak offline)
+        if (sec < 10) return;
+        if (dist < 5.0 && sec < 55) return;
+      }
 
       String statusKey = 'Standby';
       if (_currentStatus == 'menuju_seller') {
@@ -162,9 +255,10 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         statusKey = 'Selesai';
       }
 
+      // Hitung muatan HANYA dari sesi perjalanan aktif saat ini
       int totalAwb = 0;
       int totalHv = 0;
-      for (final log in _historyLogs) {
+      for (final log in _currentSessionLogs) {
         totalAwb += (log['jumlah_barang'] as int? ?? 0);
         totalHv += (log['high_value'] as int? ?? 0);
       }
@@ -176,33 +270,95 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         status: statusKey,
         koli: totalAwb,
         highValue: totalHv,
-        idDriver: _idDriver,
-        idKendaraan: _idKendaraan,
+        idDriver: effectiveDriverId,
+        idKendaraan: effectiveKendaraanId,
         idRitase: 0,
       );
+      _lastSentPosition = pos;
+      _lastSentTime = now;
       // ignore: avoid_print
-      print('📍 [PICKUP GPS] Posisi live driver pickup masuk armada_tracking: (${pos.latitude}, ${pos.longitude}) | Kendaraan: $_idKendaraan | Driver: $_idDriver');
+      print('📍 [PICKUP GPS] Posisi live driver pickup masuk armada_tracking: (${pos.latitude}, ${pos.longitude}) | Kendaraan: $effectiveKendaraanId | Driver: $effectiveDriverId | Muatan: $totalAwb AWB');
     } catch (e) {
       // ignore: avoid_print
       print('⚠️ [PICKUP GPS] Gagal kirim lokasi: $e');
     }
   }
 
+  /// Membuka form muatan seller dan menangani perubahan status secara langsung
+  Future<void> _openPickupForm() async {
+    if (_isFormScreenOpen) return;
+    _isFormScreenOpen = true;
+    _hasAutoOpenedForm = true;
+
+    if (_idKendaraan <= 0) {
+      final selected = await _showSelectVehicleDialog();
+      if (!selected || !mounted) {
+        _isFormScreenOpen = false;
+        return;
+      }
+    }
+    if (!mounted) {
+      _isFormScreenOpen = false;
+      return;
+    }
+
+    final newStatus = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => PickupFormScreen(
+          idUser: _idUser,
+          namaDriver: _driverName.isNotEmpty ? _driverName : _username,
+          currentStatus: _currentStatus,
+        ),
+      ),
+    );
+
+    _isFormScreenOpen = false;
+
+    if (newStatus != null && newStatus.isNotEmpty && mounted) {
+      setState(() {
+        _currentStatus = newStatus;
+      });
+      await ApiClient.savePickupStatus(newStatus);
+    }
+
+    await _refreshHistory();
+    if (_currentStatus == 'menuju_seller' || _currentStatus == 'menuju_gudang') {
+      await _sendLiveLocation(force: true);
+    }
+  }
+
   Future<void> _refreshHistory() async {
     if (_idUser <= 0) return;
     try {
-      final logs = await PickupService.getPickupHistory(_idUser);
-      String latestStatus = 'standby';
+      final now = DateTime.now();
+      final y = now.year.toString();
+      final m = now.month.toString().padLeft(2, '0');
+      final d = now.day.toString().padLeft(2, '0');
+      final todayStr = '$y-$m-$d';
 
-      if (logs.isNotEmpty) {
-        latestStatus = (logs.first['status'] ?? 'standby').toString();
+      final logs = await PickupService.getPickupHistory(_idUser, tanggal: todayStr);
+
+      // Pastikan hanya data tanggal hari ini yang dimasukkan ke riwayat hari ini
+      final todayLogs = logs.where((l) {
+        final tgl = (l['tanggal'] ?? '').toString().trim();
+        return tgl.isEmpty || tgl == todayStr;
+      }).toList();
+
+      String latestStatus = _currentStatus;
+
+      if (todayLogs.isNotEmpty) {
+        final serverStatus = (todayLogs.first['status'] ?? '').toString();
+        if (serverStatus.isNotEmpty) {
+          latestStatus = serverStatus;
+        }
       }
 
       if (mounted) {
         setState(() {
-          _historyLogs = logs;
+          _historyLogs = todayLogs;
           _currentStatus = latestStatus;
         });
+        await ApiClient.savePickupStatus(_currentStatus);
       }
     } catch (_) {}
   }
@@ -304,15 +460,6 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                                     ),
                                     child: Row(
                                       children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(10),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFF27D26).withValues(alpha: 0.12),
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          child: const Icon(Icons.two_wheeler_rounded, color: Color(0xFFF27D26), size: 22),
-                                        ),
-                                        const SizedBox(width: 14),
                                         Expanded(
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -351,8 +498,9 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         _platNomor = plat;
       });
 
+      final effectiveDriverId = _idDriver > 0 ? _idDriver : (_idUser > 0 ? _idUser : 39);
       await ApiClient.saveDriverConfig(
-        idDriver: _idDriver,
+        idDriver: effectiveDriverId,
         idKendaraan: id,
         idRitase: 0,
         driverName: _driverName,
@@ -362,7 +510,8 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         platNomor: plat,
       );
 
-      await _sendLiveLocation();
+      await ensureTrackingRunning();
+      await _sendLiveLocation(force: true);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -382,6 +531,8 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
   Future<void> _handleCircleTap() async {
     if (_currentStatus == 'menuju_gudang') {
       await _handleSampaiGudang();
+    } else if (_currentStatus == 'menuju_seller') {
+      await _openPickupForm();
     } else {
       await _handleStartPickup();
     }
@@ -430,23 +581,14 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
         catatan: 'Perjalanan selesai · Sampai di gudang',
       );
 
-      // 2. Kirim sinyal offline agar langsung terhapus dari armada_tracking dan peta Fadel
-      await ApiClient.sendTrackingOffline(
-        idKendaraan: _idKendaraan,
-        idDriver: _idDriver,
-      );
-
-      // 3. Matikan background tracking
-      try {
-        await stopBackgroundTracking();
-      } catch (_) {}
-
-      // 4. Update status lokal dan riwayat
+      // 2. Update status lokal dan riwayat
       if (mounted) {
         setState(() {
           _currentStatus = 'selesai';
         });
       }
+      await ApiClient.savePickupStatus('selesai');
+      await _sendLiveLocation(force: true);
       await _refreshHistory();
 
       if (mounted) {
@@ -477,32 +619,67 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
     // Jika belum memilih kendaraan, minta pilih dulu
     if (_idKendaraan <= 0) {
       final selected = await _showSelectVehicleDialog();
-      if (!selected) return;
+      if (!selected || !mounted) return;
     }
 
-    // Pastikan GPS tracking terkirim saat memulai pickup
-    await _sendLiveLocation(force: true);
-    try {
-      await startBackgroundTracking();
-    } catch (_) {}
+    setState(() {
+      _currentStatus = 'menuju_seller';
+    });
+    await ApiClient.savePickupStatus('menuju_seller');
 
-    if (!mounted) return;
-
-    // Buka form input muatan seller
-    await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => PickupFormScreen(
+    // Jalankan sync backend & GPS tracking di background tanpa memblokir pembukaan form
+    () async {
+      try {
+        await PickupService.savePickupBarang(
           idUser: _idUser,
           namaDriver: _driverName.isNotEmpty ? _driverName : _username,
-          currentStatus: _currentStatus,
+          asalSeller: 'Gudang',
+          jumlahBarang: 0,
+          highValue: 0,
+          koli: 0,
+          ecer: 0,
+          status: 'menuju_seller',
+          catatan: 'Berangkat dari gudang menuju seller',
+        );
+      } catch (_) {}
+
+      try {
+        await _sendLiveLocation(force: true);
+      } catch (_) {}
+
+      try {
+        await startBackgroundTracking();
+      } catch (_) {}
+
+      if (mounted) {
+        _refreshHistory();
+      }
+    }();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.navigation_rounded, color: Colors.white, size: 20),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Perjalanan dimulai · Sedang menuju seller.',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
+        backgroundColor: Color(0xFF0D47A1),
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: 2),
       ),
     );
 
-    await _refreshHistory();
-    if (_currentStatus == 'menuju_seller' || _currentStatus == 'menuju_gudang') {
-      await _sendLiveLocation(force: true);
-    }
+    // Langsung buka form input muatan seller secara instan
+    if (!mounted) return;
+    await _openPickupForm();
   }
 
   Future<void> _confirmLogout() async {
@@ -622,28 +799,46 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                         final awb = log['jumlah_barang'] ?? 0;
                         final hv = log['high_value'] ?? 0;
                         final status = log['status'] ?? '';
+                        final isSelesai = status == 'selesai';
                         final isMenujuGudang = status == 'menuju_gudang';
+
+                        String statusLabel = 'Menuju Seller';
+                        Color statusColor = const Color(0xFFF59E0B);
+                        IconData iconData = Icons.store_rounded;
+                        Color iconBgColor = const Color(0xFFF27D26);
+
+                        if (isSelesai) {
+                          statusLabel = 'Selesai di Gudang';
+                          statusColor = const Color(0xFF3B82F6);
+                          iconData = Icons.check_circle_rounded;
+                          iconBgColor = const Color(0xFF3B82F6);
+                        } else if (isMenujuGudang) {
+                          statusLabel = 'Menuju Gudang';
+                          statusColor = const Color(0xFF10B981);
+                          iconData = Icons.warehouse_rounded;
+                          iconBgColor = const Color(0xFF10B981);
+                        }
 
                         return Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
+                            color: isSelesai ? const Color(0xFFF0FDF4) : const Color(0xFFF8FAFC),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            border: Border.all(
+                              color: isSelesai ? const Color(0xFFBBF7D0) : const Color(0xFFE2E8F0),
+                            ),
                           ),
                           child: Row(
                             children: [
                               Container(
                                 padding: const EdgeInsets.all(10),
                                 decoration: BoxDecoration(
-                                  color: isMenujuGudang
-                                      ? const Color(0xFF10B981).withValues(alpha: 0.1)
-                                      : const Color(0xFFF27D26).withValues(alpha: 0.1),
+                                  color: iconBgColor.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Icon(
-                                  isMenujuGudang ? Icons.warehouse_rounded : Icons.store_rounded,
-                                  color: isMenujuGudang ? const Color(0xFF10B981) : const Color(0xFFF27D26),
+                                  iconData,
+                                  color: iconBgColor,
                                   size: 22,
                                 ),
                               ),
@@ -658,34 +853,35 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      status == 'menuju_gudang' ? 'Menuju Gudang' : 'Menuju Seller',
+                                      statusLabel,
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: isMenujuGudang ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                        color: statusColor,
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    '$awb AWB',
-                                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                                  ),
-                                  if (hv > 0)
+                              if (!isSelesai)
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
                                     Text(
-                                      '$hv HV',
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFFDC2626),
-                                      ),
+                                      '$awb AWB',
+                                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
                                     ),
-                                ],
-                              ),
+                                    if (hv > 0)
+                                      Text(
+                                        '$hv HV',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: Color(0xFFDC2626),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                             ],
                           ),
                         );
@@ -740,18 +936,15 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
           ? const Center(child: CircularProgressIndicator())
           : Stack(
               children: [
-                // Background peta samar halus
+                // Background peta samar halus (ringan GPU, tanpa Opacity off-screen buffer)
                 Positioned.fill(
-                  child: Opacity(
-                    opacity: 0.04,
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        image: DecorationImage(
-                          image: AssetImage('assets/images/map_bg.png'),
-                          fit: BoxFit.cover,
-                          alignment: Alignment.center,
-                          onError: null,
-                        ),
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      image: DecorationImage(
+                        image: AssetImage('assets/images/map_bg.png'),
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
+                        opacity: 0.04,
                       ),
                     ),
                   ),
@@ -772,29 +965,33 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                           scale: _pulseAnimation,
                           child: GestureDetector(
                             onTap: _handleCircleTap,
-                            child: Container(
-                              width: 250,
-                              height: 250,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: const Color(0xFFF59E0B).withValues(alpha: 0.25),
-                              ),
-                              child: Center(
-                                child: Container(
-                                  width: 205,
-                                  height: 205,
-                                  decoration: const BoxDecoration(
+                            child: Builder(
+                              builder: (context) {
+                                final isGudangPhase = _currentStatus == 'menuju_gudang';
+                                final circleColor = isGudangPhase ? const Color(0xFF10B981) : const Color(0xFFF59E0B);
+                                return Container(
+                                  width: 250,
+                                  height: 250,
+                                  decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: Color(0xFFF59E0B),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Color(0x33F59E0B),
-                                        blurRadius: 18,
-                                        spreadRadius: 2,
-                                        offset: Offset(0, 4),
-                                      ),
-                                    ],
+                                    color: circleColor.withValues(alpha: 0.25),
                                   ),
+                                  child: Center(
+                                    child: Container(
+                                      width: 205,
+                                      height: 205,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: circleColor,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: circleColor.withValues(alpha: 0.3),
+                                            blurRadius: 18,
+                                            spreadRadius: 2,
+                                            offset: const Offset(0, 4),
+                                          ),
+                                        ],
+                                      ),
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
@@ -842,21 +1039,28 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                                         ),
                                       ),
                                       const SizedBox(height: 8),
-                                      Text(
-                                        _currentTime,
-                                        style: TextStyle(
-                                          color: Colors.white.withValues(alpha: 0.9),
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                        ),
+                                      ValueListenableBuilder<String>(
+                                        valueListenable: _currentTimeNotifier,
+                                        builder: (context, timeStr, _) {
+                                          return Text(
+                                            timeStr,
+                                            style: TextStyle(
+                                              color: Colors.white.withValues(alpha: 0.9),
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         ),
+                      ),
+                    ),
 
                         const SizedBox(height: 36),
 
@@ -888,9 +1092,13 @@ class _PickupHomeScreenState extends State<PickupHomeScreen>
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                             child: Text(
-                              _historyLogs.isEmpty
-                                  ? 'Lihat riwayat pickup'
-                                  : 'Lihat riwayat pickup (${_historyLogs.length} seller)',
+                              _currentStatus == 'menuju_seller' || _currentStatus == 'menuju_gudang'
+                                  ? (_currentSessionSellerCount == 0
+                                      ? 'Lihat muatan aktif (0 seller)'
+                                      : 'Lihat muatan aktif ($_currentSessionSellerCount seller)')
+                                  : (_historyLogs.isEmpty
+                                      ? 'Lihat riwayat pickup'
+                                      : 'Lihat riwayat pickup (${_historyLogs.length} riwayat)'),
                               style: const TextStyle(
                                 fontSize: 13,
                                 color: Color(0xFF64748B),

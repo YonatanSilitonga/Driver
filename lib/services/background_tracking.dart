@@ -1,5 +1,7 @@
 // ignore_for_file: avoid_print
 
+import 'dart:async';
+
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -53,48 +55,82 @@ Future<void> _postWithRetry(Dio dio, Map<String, dynamic> data) async {
   }
 }
 
-/// Kirim heartbeat posisi ke backend dari background (layar mati / di-background).
-/// Hitung kecepatan dari delta posisi antar-heartbeat (GPS hardware speed
-/// sering 0 saat layar mati) biar dashboard gak selalu "Berhenti".
+/// Kirim heartbeat / pergerakan posisi ke backend dari background (layar mati / di-background).
+/// Hitung kecepatan dari delta posisi (GPS hardware speed sering 0 saat layar mati)
+/// biar dashboard gak selalu "Berhenti".
+Position? _lastBgPosition;
+DateTime? _lastBgSentTime;
 double? _prevBgLat;
 double? _prevBgLng;
 DateTime? _prevBgTime;
 
-Future<void> _sendHeartbeat() async {
+/// Kirim payload tracking ke backend
+Future<void> _sendTrackingPayload({
+  required Position pos,
+  required bool isHeartbeat,
+}) async {
   try {
     final cfg = await ApiClient.loadDriverConfig();
-    final idDriver = cfg['id_driver'] as int? ?? 0;
-    final idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    var idDriver = cfg['id_driver'] as int? ?? 0;
+    var idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    final role = (cfg['role'] ?? '').toString().trim().toLowerCase();
+    final idUser = cfg['id_user'] as int? ?? 0;
+    if (role == 'driver_pickup') {
+      if (idDriver <= 0) idDriver = (idUser > 0 ? idUser : 39);
+      if (idKendaraan <= 0) idKendaraan = 18;
+    }
     if (idDriver <= 0 || idKendaraan <= 0) return; // identitas belum lengkap
 
     final token = await ApiClient.getToken();
     if (token == null || token.isEmpty) return; // belum login → jangan kirim
 
-    final pos = await Geolocator.getCurrentPosition();
     final idRitase = cfg['id_ritase'] as int? ?? 0;
-
-    // Speed: pakai speed hardware kalau valid (>0), fallback hitung dari
-    // delta posisi antar-heartbeat (distanceBetween / delta waktu * 3.6).
-    var speedKmh = (pos.speed < 0 ? 0.0 : pos.speed * 3.6).round();
     final now = DateTime.now();
-    if (speedKmh == 0 &&
-        _prevBgLat != null &&
-        _prevBgLng != null &&
-        _prevBgTime != null) {
-      final dtSec = now.difference(_prevBgTime!).inSeconds;
-      if (dtSec > 0) {
-        final distM = Geolocator.distanceBetween(
-          _prevBgLat!,
-          _prevBgLng!,
-          pos.latitude,
-          pos.longitude,
-        );
-        speedKmh = ((distM / dtSec) * 3.6).round();
+
+    // Hitung kecepatan: jika bukan heartbeat (bergerak), gunakan speed hardware atau delta
+    int speedKmh = 0;
+    if (!isHeartbeat) {
+      var speedCalc = (pos.speed < 0 ? 0.0 : pos.speed * 3.6).round();
+      if (speedCalc == 0 &&
+          _prevBgLat != null &&
+          _prevBgLng != null &&
+          _prevBgTime != null) {
+        final dtSec = now.difference(_prevBgTime!).inSeconds;
+        if (dtSec > 0) {
+          final distM = Geolocator.distanceBetween(
+            _prevBgLat!,
+            _prevBgLng!,
+            pos.latitude,
+            pos.longitude,
+          );
+          speedCalc = ((distM / dtSec) * 3.6).round();
+        }
       }
+      speedKmh = speedCalc;
+    } else {
+      // Saat diam / macet (Heartbeat), kecepatan 0 km/h
+      speedKmh = 0;
     }
+
     _prevBgLat = pos.latitude;
     _prevBgLng = pos.longitude;
     _prevBgTime = now;
+    _lastBgPosition = pos;
+    _lastBgSentTime = now;
+
+    final pickupStatus = (cfg['pickup_status'] ?? '').toString();
+    String status = 'Background';
+    if (role == 'driver_pickup') {
+      if (pickupStatus == 'menuju_seller') {
+        status = 'Sedang Menuju';
+      } else if (pickupStatus == 'menuju_gudang') {
+        status = 'Kembali ke Gudang';
+      } else if (pickupStatus == 'selesai') {
+        status = 'Selesai';
+      } else {
+        status = 'Standby';
+      }
+    }
 
     final dio = await _bgDio();
     await _postWithRetry(dio, {
@@ -104,11 +140,12 @@ Future<void> _sendHeartbeat() async {
       'latitude': pos.latitude,
       'longitude': pos.longitude,
       'kecepatan': speedKmh,
-      'status': 'Background',
+      'status': status,
       'durasi_detik': 0,
     });
+    print('[BG TRACKING] Posisi terkirim: lat=${pos.latitude}, lng=${pos.longitude}, speed=$speedKmh (heartbeat=$isHeartbeat)');
   } catch (e) {
-    print('[BG TRACKING] gagal: $e');
+    print('[BG TRACKING] gagal kirim payload: $e');
   }
 }
 
@@ -118,8 +155,14 @@ Future<void> _sendHeartbeat() async {
 Future<void> sendOfflineSignal() async {
   try {
     final cfg = await ApiClient.loadDriverConfig();
-    final idDriver = cfg['id_driver'] as int? ?? 0;
-    final idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    var idDriver = cfg['id_driver'] as int? ?? 0;
+    var idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    final role = (cfg['role'] ?? '').toString().trim().toLowerCase();
+    final idUser = cfg['id_user'] as int? ?? 0;
+    if (role == 'driver_pickup') {
+      if (idDriver <= 0) idDriver = (idUser > 0 ? idUser : 39);
+      if (idKendaraan <= 0) idKendaraan = 18;
+    }
     if (idDriver <= 0 || idKendaraan <= 0) return;
 
     final token = await ApiClient.getToken();
@@ -143,19 +186,119 @@ Future<void> sendOfflineSignal() async {
 
 /// Handler yang dijalankan foreground service (isolate background).
 class _BgTaskHandler extends TaskHandler {
+  StreamSubscription<Position>? _positionStreamSub;
+
+  void _startPositionStream() {
+    _positionStreamSub?.cancel();
+    try {
+      // Event-driven: GPS stream update saat kendaraan bergerak
+      // Menggunakan distanceFilter 2m agar GPS hardware tetap responsif mengirim titik
+      const locationSettings = LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2,
+      );
+
+      _positionStreamSub = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
+      ).listen(
+        (Position pos) {
+          final now = DateTime.now();
+          final timeDiff = _lastBgSentTime == null ? 999 : now.difference(_lastBgSentTime!).inSeconds;
+
+          double distMoved = 0.0;
+          if (_lastBgPosition != null) {
+            distMoved = Geolocator.distanceBetween(
+              _lastBgPosition!.latitude,
+              _lastBgPosition!.longitude,
+              pos.latitude,
+              pos.longitude,
+            );
+          } else {
+            distMoved = 999.0;
+          }
+
+          // Aturan tracking: kirim jika interval >= 10 detik DAN pergerakan >= 5 meter
+          if (timeDiff >= 10 && distMoved >= 5.0) {
+            _sendTrackingPayload(pos: pos, isHeartbeat: false);
+          }
+        },
+        onError: (err) {
+          print('[BG TRACKING] Stream location error: $err');
+        },
+      );
+      print('[BG TRACKING] getPositionStream aktif (10s interval / >= 5m filter)');
+    } catch (e) {
+      print('[BG TRACKING] Gagal start getPositionStream: $e');
+    }
+  }
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    await _sendHeartbeat();
+    // 1. Ambil & kirim lokasi awal (prioritaskan live satelit)
+    try {
+      Position? initialPos;
+      try {
+        initialPos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 7),
+          ),
+        );
+      } catch (_) {
+        initialPos = await Geolocator.getLastKnownPosition();
+      }
+      if (initialPos != null) {
+        await _sendTrackingPayload(pos: initialPos, isHeartbeat: false);
+      }
+    } catch (e) {
+      print('[BG TRACKING] onStart get location gagal: $e');
+    }
+
+    // 2. Mulai stream pergerakan berjarak 30 meter
+    _startPositionStream();
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {
-    _sendHeartbeat();
+    // Pastikan stream tetap terhubung
+    if (_positionStreamSub == null) {
+      _startPositionStream();
+    }
+
+    // Heartbeat: Jika dalam 50 detik terakhir tidak ada pergerakan >= 10m (macet/parkir/loading),
+    // kirim sinyal heartbeat dengan posisi terakhir agar backend tahu armada tetap online & diam.
+    _checkHeartbeat();
+  }
+
+  Future<void> _checkHeartbeat() async {
+    final now = DateTime.now();
+    if (_lastBgSentTime == null || now.difference(_lastBgSentTime!).inSeconds >= 50) {
+      Position? posToSend = _lastBgPosition;
+      if (posToSend == null) {
+        try {
+          try {
+            posToSend = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.high,
+                timeLimit: Duration(seconds: 5),
+              ),
+            );
+          } catch (_) {
+            posToSend = await Geolocator.getLastKnownPosition();
+          }
+        } catch (_) {}
+      }
+
+      if (posToSend != null) {
+        await _sendTrackingPayload(pos: posToSend, isHeartbeat: true);
+      }
+    }
   }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    // Service berhenti → kasih tau backend biar truk langsung OFF.
+    await _positionStreamSub?.cancel();
+    _positionStreamSub = null;
     await sendOfflineSignal();
   }
 }
@@ -182,11 +325,9 @@ Future<void> startBackgroundTracking() async {
   try {
     if (await FlutterForegroundTask.isRunningService) return; // sudah jalan
 
-    // Wajib izin "Always" — tanpa ini Android blokir GPS saat layar mati
-    // (background location) dan service cuma jalan sia-sia.
     final permission = await Geolocator.checkPermission();
-    if (permission != LocationPermission.always) {
-      print('[BG TRACK] izin lokasi belum "Always", service belum di-start');
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      print('[BG TRACK] izin lokasi ditolak, service belum di-start');
       return;
     }
 
@@ -200,10 +341,10 @@ Future<void> startBackgroundTracking() async {
       ),
       iosNotificationOptions: IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(30000), // 30 detik
+        eventAction: ForegroundTaskEventAction.repeat(60000), // Heartbeat setiap 60 detik (saat diam/macet)
         autoRunOnBoot: true, // restart service otomatis setelah HP reboot
-        allowWakeLock: true, // CPU tetep bangun pas layar mati (default true, eksplisit)
-        allowWifiLock: true, // WiFi/sinyal tetep hidup pas layar mati biar data terkirim
+        allowWakeLock: true, // CPU bangun saat event/stream
+        allowWifiLock: true, // WiFi/sinyal hidup biar data terkirim
       ),
     );
     FlutterForegroundTask.initCommunicationPort();
@@ -234,7 +375,7 @@ Future<void> stopBackgroundTracking() async {
 
 /// Watchdog: pastikan service tracking jalan selagi app masih terbuka.
 /// Kalau service di-kill OS (battery saver agresif), restart otomatis —
-/// selama izin "Always" masih aktif & user masih login.
+/// selama user masih login.
 /// Panggil periodik dari UI (misal tiap 30 detik).
 Future<void> ensureTrackingRunning() async {
   try {
@@ -244,14 +385,18 @@ Future<void> ensureTrackingRunning() async {
     if (token == null || token.isEmpty) return; // belum login → jangan start
 
     final cfg = await ApiClient.loadDriverConfig();
-    final idDriver = cfg['id_driver'] as int? ?? 0;
-    final idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    var idDriver = cfg['id_driver'] as int? ?? 0;
+    var idKendaraan = cfg['id_kendaraan'] as int? ?? 0;
+    final role = (cfg['role'] ?? '').toString().trim().toLowerCase();
+    final idUser = cfg['id_user'] as int? ?? 0;
+    if (role == 'driver_pickup') {
+      if (idDriver <= 0) idDriver = (idUser > 0 ? idUser : 39);
+      if (idKendaraan <= 0) idKendaraan = 18;
+    }
     if (idDriver <= 0 || idKendaraan <= 0) return; // identitas belum lengkap
 
-    // Izin "Always" wajib — tanpa ini service jalan sia-sia (Android blokir GPS
-    // saat layar mati).
     final permission = await Geolocator.checkPermission();
-    if (permission != LocationPermission.always) return;
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) return;
 
     await startBackgroundTracking();
   } catch (e) {

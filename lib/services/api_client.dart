@@ -4,8 +4,16 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../utils/network_exception.dart';
-
 class ApiClient {
+  // Production VPS:
+  static const String _defaultUrl = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  );
+  static const String _fallbackUrl = String.fromEnvironment(
+    'API_URL_FALLBACK',
+    defaultValue: 'https://api.controltowerslb.tech/api/v1',
+  );
   static const String _tokenKey = 'auth_token';
   static const Set<String> _idempotentMethods = {'GET', 'HEAD', 'OPTIONS'};
 
@@ -129,6 +137,7 @@ class ApiClient {
   static const String _keyIdUser = 'config_id_user';
   static const String _keyUsername = 'config_username';
   static const String _keyPlatNomor = 'config_plat_nomor';
+  static const String _keyPickupStatus = 'config_pickup_status';
 
   // Simpan konfigurasi identitas tracking & session
   static Future<void> saveDriverConfig({
@@ -140,6 +149,7 @@ class ApiClient {
     int? idUser,
     String? username,
     String? platNomor,
+    String? pickupStatus,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_keyIdDriver, idDriver);
@@ -160,6 +170,20 @@ class ApiClient {
     if (platNomor != null && platNomor.isNotEmpty) {
       await prefs.setString(_keyPlatNomor, platNomor);
     }
+    if (pickupStatus != null && pickupStatus.isNotEmpty) {
+      await prefs.setString(_keyPickupStatus, pickupStatus);
+    }
+  }
+
+  // Simpan & ambil status pickup driver secara lokal
+  static Future<void> savePickupStatus(String status) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyPickupStatus, status);
+  }
+
+  static Future<String> getPickupStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_keyPickupStatus) ?? 'standby';
   }
 
   // Ambil konfigurasi identitas tracking & session
@@ -174,6 +198,7 @@ class ApiClient {
       'id_user': prefs.getInt(_keyIdUser) ?? 0,
       'username': prefs.getString(_keyUsername) ?? '',
       'plat_nomor': prefs.getString(_keyPlatNomor) ?? '',
+      'pickup_status': prefs.getString(_keyPickupStatus) ?? 'standby',
     };
   }
 
@@ -187,6 +212,10 @@ class ApiClient {
     await prefs.remove(_keyUserRole);
     await prefs.remove(_keySellerId);
     await prefs.remove(_keyImplantId);
+    await prefs.remove(_keyIdUser);
+    await prefs.remove(_keyUsername);
+    await prefs.remove(_keyPlatNomor);
+    await prefs.remove(_keyPickupStatus);
   }
 
   // ── Konfigurasi role user (driver/kapten) ──
